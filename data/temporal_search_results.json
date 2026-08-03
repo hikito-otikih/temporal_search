@@ -1,0 +1,3002 @@
+[
+    {
+        "score": 0.25312256813049316,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.24863103032112122,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.22696280479431152,
+                "query_id": 0
+            },
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.2836052179336548,
+                "query_id": 1
+            },
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.23709607124328613,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.24686002731323242,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2481246292591095,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.23098325729370117,
+                "query_id": 0
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.23808622360229492,
+                "query_id": 1
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.2512129545211792,
+                "query_id": 2
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.2722160816192627,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2470102459192276,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 10608,
+                "timestamp": "05:53",
+                "score": 0.23145633935928345,
+                "query_id": 0
+            },
+            {
+                "frame_index": 10608,
+                "timestamp": "05:53",
+                "score": 0.24630320072174072,
+                "query_id": 1
+            },
+            {
+                "frame_index": 10608,
+                "timestamp": "05:53",
+                "score": 0.25627464056015015,
+                "query_id": 2
+            },
+            {
+                "frame_index": 10608,
+                "timestamp": "05:53",
+                "score": 0.2540068030357361,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.24415898323059082,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2471281886100769,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.248848557472229,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.24024099111557007,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2407437264919281,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 23802,
+                "timestamp": "13:13",
+                "score": 0.2246573567390442,
+                "query_id": 0
+            },
+            {
+                "frame_index": 23802,
+                "timestamp": "13:13",
+                "score": 0.23939353227615356,
+                "query_id": 1
+            },
+            {
+                "frame_index": 23802,
+                "timestamp": "13:13",
+                "score": 0.2506437301635742,
+                "query_id": 2
+            },
+            {
+                "frame_index": 23802,
+                "timestamp": "13:13",
+                "score": 0.24828028678894043,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2403198629617691,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23971298336982727,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.24273830652236938,
+                "query_id": 0
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.2423548698425293,
+                "query_id": 1
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.2310141921043396,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.2427445650100708,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23850621283054352,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.24009180068969727,
+                "query_id": 0
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.26013147830963135,
+                "query_id": 1
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.23284995555877686,
+                "query_id": 2
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.2209516167640686,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2378200888633728,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 26410,
+                "timestamp": "14:40",
+                "score": 0.22788208723068237,
+                "query_id": 0
+            },
+            {
+                "frame_index": 26410,
+                "timestamp": "14:40",
+                "score": 0.24800747632980347,
+                "query_id": 1
+            },
+            {
+                "frame_index": 26410,
+                "timestamp": "14:40",
+                "score": 0.23881685733795166,
+                "query_id": 2
+            },
+            {
+                "frame_index": 26410,
+                "timestamp": "14:40",
+                "score": 0.2365739345550537,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23634567856788635,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2342848926782608,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 12601,
+                "timestamp": "07:00",
+                "score": 0.22705316543579102,
+                "query_id": 0
+            },
+            {
+                "frame_index": 12601,
+                "timestamp": "07:00",
+                "score": 0.23520469665527344,
+                "query_id": 1
+            },
+            {
+                "frame_index": 12601,
+                "timestamp": "07:00",
+                "score": 0.23043817281723022,
+                "query_id": 2
+            },
+            {
+                "frame_index": 12601,
+                "timestamp": "07:00",
+                "score": 0.24444353580474854,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23425006866455078,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.22169804573059082,
+                "query_id": 0
+            },
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.2323213815689087,
+                "query_id": 1
+            },
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.21354472637176514,
+                "query_id": 2
+            },
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.2694361209869385,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23243318498134613,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 21933,
+                "timestamp": "12:11",
+                "score": 0.23128801584243774,
+                "query_id": 0
+            },
+            {
+                "frame_index": 21933,
+                "timestamp": "12:11",
+                "score": 0.2449338436126709,
+                "query_id": 1
+            },
+            {
+                "frame_index": 21933,
+                "timestamp": "12:11",
+                "score": 0.21919667720794678,
+                "query_id": 2
+            },
+            {
+                "frame_index": 21933,
+                "timestamp": "12:11",
+                "score": 0.2343142032623291,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.23056375980377197,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 15112,
+                "timestamp": "08:23",
+                "score": 0.22669261693954468,
+                "query_id": 0
+            },
+            {
+                "frame_index": 15112,
+                "timestamp": "08:23",
+                "score": 0.24308055639266968,
+                "query_id": 1
+            },
+            {
+                "frame_index": 15112,
+                "timestamp": "08:23",
+                "score": 0.23277324438095093,
+                "query_id": 2
+            },
+            {
+                "frame_index": 15112,
+                "timestamp": "08:23",
+                "score": 0.2197086215019226,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22971536219120026,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 15856,
+                "timestamp": "08:48",
+                "score": 0.21850037574768066,
+                "query_id": 0
+            },
+            {
+                "frame_index": 15856,
+                "timestamp": "08:48",
+                "score": 0.23661494255065918,
+                "query_id": 1
+            },
+            {
+                "frame_index": 15856,
+                "timestamp": "08:48",
+                "score": 0.2289847731590271,
+                "query_id": 2
+            },
+            {
+                "frame_index": 15856,
+                "timestamp": "08:48",
+                "score": 0.23476135730743408,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2294081151485443,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 13631,
+                "timestamp": "07:34",
+                "score": 0.22308695316314697,
+                "query_id": 0
+            },
+            {
+                "frame_index": 13631,
+                "timestamp": "07:34",
+                "score": 0.2305172085762024,
+                "query_id": 1
+            },
+            {
+                "frame_index": 13631,
+                "timestamp": "07:34",
+                "score": 0.22668719291687012,
+                "query_id": 2
+            },
+            {
+                "frame_index": 13631,
+                "timestamp": "07:34",
+                "score": 0.23734110593795776,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.228596031665802,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 21800,
+                "timestamp": "12:06",
+                "score": 0.21385252475738525,
+                "query_id": 0
+            },
+            {
+                "frame_index": 21800,
+                "timestamp": "12:06",
+                "score": 0.23607361316680908,
+                "query_id": 1
+            },
+            {
+                "frame_index": 21800,
+                "timestamp": "12:06",
+                "score": 0.2200508713722229,
+                "query_id": 2
+            },
+            {
+                "frame_index": 21800,
+                "timestamp": "12:06",
+                "score": 0.24440711736679077,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.2282414436340332,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 35060,
+                "timestamp": "19:28",
+                "score": 0.21466457843780518,
+                "query_id": 0
+            },
+            {
+                "frame_index": 35060,
+                "timestamp": "19:28",
+                "score": 0.22408246994018555,
+                "query_id": 1
+            },
+            {
+                "frame_index": 35060,
+                "timestamp": "19:28",
+                "score": 0.21411943435668945,
+                "query_id": 2
+            },
+            {
+                "frame_index": 35060,
+                "timestamp": "19:28",
+                "score": 0.26009929180145264,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22807836532592773,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 28853,
+                "timestamp": "16:01",
+                "score": 0.21978729963302612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 28853,
+                "timestamp": "16:01",
+                "score": 0.22748255729675293,
+                "query_id": 1
+            },
+            {
+                "frame_index": 28853,
+                "timestamp": "16:01",
+                "score": 0.21150851249694824,
+                "query_id": 2
+            },
+            {
+                "frame_index": 28853,
+                "timestamp": "16:01",
+                "score": 0.25353509187698364,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22777900099754333,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 10330,
+                "timestamp": "05:44",
+                "score": 0.2247309684753418,
+                "query_id": 0
+            },
+            {
+                "frame_index": 10330,
+                "timestamp": "05:44",
+                "score": 0.24427396059036255,
+                "query_id": 1
+            },
+            {
+                "frame_index": 10330,
+                "timestamp": "05:44",
+                "score": 0.222234845161438,
+                "query_id": 2
+            },
+            {
+                "frame_index": 10330,
+                "timestamp": "05:44",
+                "score": 0.219876229763031,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22752094268798828,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 22926,
+                "timestamp": "12:44",
+                "score": 0.22211086750030518,
+                "query_id": 0
+            },
+            {
+                "frame_index": 22926,
+                "timestamp": "12:44",
+                "score": 0.2296367883682251,
+                "query_id": 1
+            },
+            {
+                "frame_index": 22926,
+                "timestamp": "12:44",
+                "score": 0.23406356573104858,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22926,
+                "timestamp": "12:44",
+                "score": 0.22427254915237427,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22416609525680542,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 858,
+                "timestamp": "00:28",
+                "score": 0.2172471284866333,
+                "query_id": 0
+            },
+            {
+                "frame_index": 858,
+                "timestamp": "00:28",
+                "score": 0.23587685823440552,
+                "query_id": 1
+            },
+            {
+                "frame_index": 858,
+                "timestamp": "00:28",
+                "score": 0.2117106318473816,
+                "query_id": 2
+            },
+            {
+                "frame_index": 858,
+                "timestamp": "00:28",
+                "score": 0.23182976245880127,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22396863996982574,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22314155101776123,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21760433912277222,
+                "query_id": 0
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.2302706241607666,
+                "query_id": 1
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21696847677230835,
+                "query_id": 2
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.22772276401519775,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.22243501245975494,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.2162264585494995,
+                "query_id": 0
+            },
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.22784090042114258,
+                "query_id": 1
+            },
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.2238144874572754,
+                "query_id": 2
+            },
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.2218582034111023,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.21976958215236664,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.21258115768432617,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.2353915572166443,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.21775782108306885,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.21334779262542725,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.06983414730604956,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 14139,
+                "timestamp": "07:51",
+                "score": 0.25585103034973145,
+                "query_id": 1
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.24009180068969727,
+                "query_id": 0
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.23284995555877686,
+                "query_id": 2
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.2209516167640686,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.04223670200868086,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.04190624302083796,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.04143173315308311,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.04034186764196916,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.03585434824455785,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 8967,
+                "timestamp": "04:58",
+                "score": 0.22362065315246582,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.035085846449582625,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 8967,
+                "timestamp": "04:58",
+                "score": 0.2222697138786316,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.03348431842667716,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.032627995525087626,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.032255166343280246,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.03188790211194678,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.23498159646987915,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.030730032845388482,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.030062847757992676,
+        "video_name": "L21_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 24726,
+                "timestamp": "13:44",
+                "score": 0.21133798360824585,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.2353915572166443,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.21775782108306885,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24768,
+                "timestamp": "13:45",
+                "score": 0.21334779262542725,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.028424719121397997,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.22696280479431152,
+                "query_id": 0
+            },
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.23709607124328613,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22392,
+                "timestamp": "12:26",
+                "score": 0.24686002731323242,
+                "query_id": 3
+            },
+            {
+                "frame_index": 22440,
+                "timestamp": "12:28",
+                "score": 0.22141188383102417,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.028380166880692108,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24326,
+                "timestamp": "13:30",
+                "score": 0.2205601930618286,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.028000809661634676,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.02749910721412072,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.027297636964818933,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.027180071033182596,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 8967,
+                "timestamp": "04:58",
+                "score": 0.2222697138786316,
+                "query_id": 1
+            },
+            {
+                "frame_index": 8967,
+                "timestamp": "04:58",
+                "score": 0.22362065315246582,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.027166220185520885,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.027058222791650793,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.026926806012352745,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.026725335763050962,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.026223633315537002,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.025374636600154855,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9183,
+                "timestamp": "05:06",
+                "score": 0.23716527223587036,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.024977767966804704,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9183,
+                "timestamp": "05:06",
+                "score": 0.2536453604698181,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.024721512899679294,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.023776691626099977,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.23498159646987915,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.022486886009573933,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.022384819707700183,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.022362718754764054,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2471281886100769,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.248848557472229,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.2520372271537781,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.02219017462006637,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.021933725786424867,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2471281886100769,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.24024099111557007,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.24168330430984497,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.021861421742609567,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.02185879249917975,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.23201990127563477,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.24168330430984497,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.2520372271537781,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.021841100284031457,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.02175401913094844,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.248848557472229,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.24024099111557007,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.23201990127563477,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.021512347406574657,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.02134971825753228,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.021317702318940843,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.02121563601706709,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.222975492477417,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.021194347133070734,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.021009714169017337,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.26077407598495483,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.020807441008293022,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.020622808044239625,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.02046743691977808,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.25348103046417236,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22913360595703125,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.020294947468716164,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 14085,
+                "timestamp": "07:49",
+                "score": 0.2196345329284668,
+                "query_id": 0
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.26013147830963135,
+                "query_id": 1
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.23284995555877686,
+                "query_id": 2
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.2209516167640686,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.020181465408076412,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 14085,
+                "timestamp": "07:49",
+                "score": 0.23445403575897217,
+                "query_id": 1
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.24009180068969727,
+                "query_id": 0
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.23284995555877686,
+                "query_id": 2
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.2209516167640686,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.01984187607037819,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 22118,
+                "timestamp": "12:17",
+                "score": 0.2204291820526123,
+                "query_id": 3
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.24273830652236938,
+                "query_id": 0
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.2423548698425293,
+                "query_id": 1
+            },
+            {
+                "frame_index": 22190,
+                "timestamp": "12:19",
+                "score": 0.2310141921043396,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.019790220164483594,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.23498159646987915,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.019746421565932613,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.019491454285960042,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.01941382757072285,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21760433912277222,
+                "query_id": 0
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21696847677230835,
+                "query_id": 2
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.22772276401519775,
+                "query_id": 3
+            },
+            {
+                "frame_index": 22052,
+                "timestamp": "12:15",
+                "score": 0.2423887848854065,
+                "query_id": 1
+            }
+        ]
+    },
+    {
+        "score": 0.01939883876231409,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.22941350936889648,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9126,
+                "timestamp": "05:04",
+                "score": 0.24195826053619385,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9183,
+                "timestamp": "05:06",
+                "score": 0.23716527223587036,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9183,
+                "timestamp": "05:06",
+                "score": 0.2536453604698181,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.01926301347632562,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.01924996723944537,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21760433912277222,
+                "query_id": 0
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.2302706241607666,
+                "query_id": 1
+            },
+            {
+                "frame_index": 21981,
+                "timestamp": "12:12",
+                "score": 0.21696847677230835,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22052,
+                "timestamp": "12:15",
+                "score": 0.23220503330230713,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.019052545389821453,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.018981343431022545,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.2162264585494995,
+                "query_id": 0
+            },
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.22784090042114258,
+                "query_id": 1
+            },
+            {
+                "frame_index": 19589,
+                "timestamp": "10:52",
+                "score": 0.2218582034111023,
+                "query_id": 3
+            },
+            {
+                "frame_index": 19660,
+                "timestamp": "10:55",
+                "score": 0.21860504150390625,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.0189059708387621,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.01888794991059032,
+        "video_name": "L22_V002.mp4",
+        "tuple": [
+            {
+                "frame_index": 14085,
+                "timestamp": "07:49",
+                "score": 0.2196345329284668,
+                "query_id": 0
+            },
+            {
+                "frame_index": 14139,
+                "timestamp": "07:51",
+                "score": 0.25585103034973145,
+                "query_id": 1
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.23284995555877686,
+                "query_id": 2
+            },
+            {
+                "frame_index": 14155,
+                "timestamp": "07:51",
+                "score": 0.2209516167640686,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.018714262593177055,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.23498159646987915,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.018651003558789528,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.018395904091096694,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24326,
+                "timestamp": "13:30",
+                "score": 0.2205601930618286,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.018357219955613537,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.23498159646987915,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "score": 0.0179124960014897,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24326,
+                "timestamp": "13:30",
+                "score": 0.2205601930618286,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.2282472848892212,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.017910166917478335,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 11000,
+                "timestamp": "06:06",
+                "score": 0.21279782056808472,
+                "query_id": 0
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.23808622360229492,
+                "query_id": 1
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.2512129545211792,
+                "query_id": 2
+            },
+            {
+                "frame_index": 11084,
+                "timestamp": "06:09",
+                "score": 0.2722160816192627,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.017602096366531705,
+        "video_name": "L21_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.22169804573059082,
+                "query_id": 0
+            },
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.2323213815689087,
+                "query_id": 1
+            },
+            {
+                "frame_index": 31821,
+                "timestamp": "17:40",
+                "score": 0.21354472637176514,
+                "query_id": 2
+            },
+            {
+                "frame_index": 31905,
+                "timestamp": "17:43",
+                "score": 0.2899898886680603,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.01733451331262108,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.017146757609552615,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.219621479511261,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.23660075664520264,
+                "query_id": 3
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.23596161603927612,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26117587089538574,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.01710706048732181,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.22033804655075073,
+                "query_id": 0
+            },
+            {
+                "frame_index": 24372,
+                "timestamp": "13:32",
+                "score": 0.21931427717208862,
+                "query_id": 2
+            },
+            {
+                "frame_index": 24402,
+                "timestamp": "13:33",
+                "score": 0.24568426609039307,
+                "query_id": 1
+            },
+            {
+                "frame_index": 24448,
+                "timestamp": "13:34",
+                "score": 0.26581597328186035,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "score": 0.017084968212532668,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.2443845272064209,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.24798989295959473,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.01703588395482964,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2471281886100769,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9472,
+                "timestamp": "05:15",
+                "score": 0.2404181957244873,
+                "query_id": 3
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.24168330430984497,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9539,
+                "timestamp": "05:17",
+                "score": 0.2520372271537781,
+                "query_id": 2
+            }
+        ]
+    },
+    {
+        "score": 0.016935651432977962,
+        "video_name": "L22_V001.mp4",
+        "tuple": [
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.24840325117111206,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9004,
+                "timestamp": "05:00",
+                "score": 0.22961944341659546,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2569844722747803,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9072,
+                "timestamp": "05:02",
+                "score": 0.2540348768234253,
+                "query_id": 3
+            }
+        ]
+    }
+]

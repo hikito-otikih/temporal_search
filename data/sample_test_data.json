@@ -1,0 +1,362 @@
+[
+    {
+        "video_name": "perfect_sequence.mp4",
+        "results": [
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.9,
+                "query_id": 0
+            },
+            {
+                "frame_index": 18000,
+                "timestamp": "10:00",
+                "score": 0.85,
+                "query_id": 1
+            },
+            {
+                "frame_index": 27000,
+                "timestamp": "15:00",
+                "score": 0.8,
+                "query_id": 2
+            },
+            {
+                "frame_index": 36000,
+                "timestamp": "20:00",
+                "score": 0.75,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "high_score_far_apart.mp4",
+        "results": [
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.9,
+                "query_id": 0
+            },
+            {
+                "frame_index": 36000,
+                "timestamp": "20:00",
+                "score": 0.85,
+                "query_id": 1
+            },
+            {
+                "frame_index": 63000,
+                "timestamp": "35:00",
+                "score": 0.8,
+                "query_id": 2
+            },
+            {
+                "frame_index": 90000,
+                "timestamp": "50:00",
+                "score": 0.75,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "missing_query_2.mp4",
+        "results": [
+            {
+                "frame_index": 4500,
+                "timestamp": "02:30",
+                "score": 0.7,
+                "query_id": 0
+            },
+            {
+                "frame_index": 5400,
+                "timestamp": "03:00",
+                "score": 0.6,
+                "query_id": 1
+            },
+            {
+                "frame_index": 6300,
+                "timestamp": "03:30",
+                "score": 0.9,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "late_start_q1.mp4",
+        "results": [
+            {
+                "frame_index": 4500,
+                "timestamp": "02:30",
+                "score": 0.9,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.8,
+                "query_id": 0
+            },
+            {
+                "frame_index": 13500,
+                "timestamp": "07:30",
+                "score": 0.9,
+                "query_id": 1
+            },
+            {
+                "frame_index": 18000,
+                "timestamp": "10:00",
+                "score": 0.7,
+                "query_id": 2
+            },
+            {
+                "frame_index": 22500,
+                "timestamp": "12:30",
+                "score": 0.6,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "same_frame.mp4",
+        "results": [
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.8,
+                "query_id": 0
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.7,
+                "query_id": 1
+            },
+            {
+                "frame_index": 18000,
+                "timestamp": "10:00",
+                "score": 0.6,
+                "query_id": 2
+            },
+            {
+                "frame_index": 18000,
+                "timestamp": "10:00",
+                "score": 0.5,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "tie_a.mp4",
+        "results": [
+            {
+                "frame_index": 3000,
+                "timestamp": "01:40",
+                "score": 0.5,
+                "query_id": 0
+            },
+            {
+                "frame_index": 6000,
+                "timestamp": "03:20",
+                "score": 0.5,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.5,
+                "query_id": 2
+            },
+            {
+                "frame_index": 12000,
+                "timestamp": "06:40",
+                "score": 0.5,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "tie_b.mp4",
+        "results": [
+            {
+                "frame_index": 3000,
+                "timestamp": "01:40",
+                "score": 0.5,
+                "query_id": 0
+            },
+            {
+                "frame_index": 6000,
+                "timestamp": "03:20",
+                "score": 0.5,
+                "query_id": 1
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.5,
+                "query_id": 2
+            },
+            {
+                "frame_index": 12000,
+                "timestamp": "06:40",
+                "score": 0.5,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "many_matches.mp4",
+        "results": [
+            {
+                "frame_index": 0,
+                "timestamp": "00:00",
+                "score": 0.9,
+                "query_id": 0
+            },
+            {
+                "frame_index": 3000,
+                "timestamp": "01:40",
+                "score": 0.8,
+                "query_id": 1
+            },
+            {
+                "frame_index": 6000,
+                "timestamp": "03:20",
+                "score": 0.6,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.5,
+                "query_id": 3
+            },
+            {
+                "frame_index": 15000,
+                "timestamp": "08:20",
+                "score": 0.7,
+                "query_id": 0
+            },
+            {
+                "frame_index": 30000,
+                "timestamp": "16:40",
+                "score": 0.6,
+                "query_id": 0
+            },
+            {
+                "frame_index": 31500,
+                "timestamp": "17:30",
+                "score": 0.9,
+                "query_id": 1
+            },
+            {
+                "frame_index": 33000,
+                "timestamp": "18:20",
+                "score": 0.95,
+                "query_id": 2
+            },
+            {
+                "frame_index": 34500,
+                "timestamp": "19:10",
+                "score": 0.85,
+                "query_id": 3
+            },
+            {
+                "frame_index": 60000,
+                "timestamp": "33:20",
+                "score": 0.7,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "query0_missing.mp4",
+        "results": [
+            {
+                "frame_index": 3000,
+                "timestamp": "01:40",
+                "score": 0.9,
+                "query_id": 1
+            },
+            {
+                "frame_index": 6000,
+                "timestamp": "03:20",
+                "score": 0.8,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.7,
+                "query_id": 3
+            }
+        ]
+    },
+    {
+        "video_name": "single_result.mp4",
+        "results": [
+            {
+                "frame_index": 12600,
+                "timestamp": "07:00",
+                "score": 0.6,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "video_name": "reversed_order.mp4",
+        "results": [
+            {
+                "frame_index": 3000,
+                "timestamp": "01:40",
+                "score": 0.9,
+                "query_id": 1
+            },
+            {
+                "frame_index": 6000,
+                "timestamp": "03:20",
+                "score": 0.9,
+                "query_id": 2
+            },
+            {
+                "frame_index": 9000,
+                "timestamp": "05:00",
+                "score": 0.9,
+                "query_id": 3
+            },
+            {
+                "frame_index": 30000,
+                "timestamp": "16:40",
+                "score": 0.9,
+                "query_id": 0
+            }
+        ]
+    },
+    {
+        "video_name": "zero_frame.mp4",
+        "results": [
+            {
+                "frame_index": 0,
+                "timestamp": "00:00",
+                "score": 0.3,
+                "query_id": 0
+            },
+            {
+                "frame_index": 0,
+                "timestamp": "00:00",
+                "score": 0.4,
+                "query_id": 1
+            },
+            {
+                "frame_index": 0,
+                "timestamp": "00:00",
+                "score": 0.5,
+                "query_id": 2
+            },
+            {
+                "frame_index": 0,
+                "timestamp": "00:00",
+                "score": 0.6,
+                "query_id": 3
+            }
+        ]
+    }
+]
