@@ -30,7 +30,7 @@ Install the Python dependencies in a virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install fastapi uvicorn pydantic pandas
+python -m pip install -r requirements.txt
 ```
 
 On Windows PowerShell, activate the environment with:
@@ -84,6 +84,78 @@ Check that it is running:
 ```bash
 curl http://127.0.0.1:8001/
 ```
+
+## Rewrite queries with Ollama
+
+`POST /rewrite` rewrites each event query into a self-contained sentence so it
+still carries the video's overall semantic context when used on its own.
+
+Create a `.env` file in the project root before starting the API:
+
+```dotenv
+OLLAMA_API_KEY=your-ollama-api-key
+OLLAMA_API_URL=https://ollama.com/api/chat
+```
+
+`OLLAMA_API_KEY` is required. `OLLAMA_API_URL` is optional and defaults to
+`https://ollama.com/api/chat`. Do not commit a real API key to source control.
+
+Example request:
+
+```json
+{
+  "modelname": "gpt-oss:20b",
+  "common_query": "Đoạn video múa lân với một con lân màu vàng, đen và trắng.",
+  "query": [
+    "E1: Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
+    "E2: Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."
+  ]
+}
+```
+
+Illustrative response (exact wording depends on the selected model):
+
+```json
+{
+  "modelname": "gpt-oss:20b",
+  "common_query": "Đoạn video múa lân với một con lân màu vàng, đen và trắng.",
+  "query": [
+    "E1: Trong đoạn video múa lân với một con lân màu vàng, đen và trắng, khoảnh khắc đầu tiên con lân bắt đầu xoay vòng trên cột số 4 bằng hai chân trước trước khi tiếp đất.",
+    "E2: Trong đoạn video múa lân với một con lân màu vàng, đen và trắng, khoảnh khắc đầu tiên cả bốn chân của con lân chạm hoàn toàn xuống đất."
+  ]
+}
+```
+
+### Rewrite behavior
+
+- `modelname` is passed to Ollama as the model to use.
+- `common_query` is optional. A blank value is treated as omitted.
+- The API normally makes one Ollama request for each `query` item. Every request
+  receives `common_query` and the full input list as context, but instructs the
+  model to rewrite only one target event. Calls may run concurrently, up to four
+  at once.
+- A draft that omits the identifying details from `common_query` is rejected and
+  retried once with explicit feedback about the missing context. If both model
+  drafts remain too shallow, the cleaned common context is prepended so the
+  returned query is still self-contained.
+- Each rewritten event must be understandable by itself. Results preserve the
+  input order and the response echoes `modelname` and `common_query`.
+- Without `common_query`, the other query items still provide context for each
+  independent rewrite.
+
+### Rewrite errors
+
+- `422` indicates invalid input. `modelname` and all query strings must be
+  non-empty; `query` must contain 1-32 items. Each query is limited to 4,000
+  characters, all queries together to 24,000, and `common_query` to 8,000.
+- `500` indicates that `OLLAMA_API_KEY` is not configured.
+- `502` indicates an Ollama connection failure, error response, or malformed or
+  empty response.
+- `503` indicates that Ollama rate-limited the request.
+- `504` indicates that the Ollama request timed out.
+
+Errors use FastAPI's standard `detail` field. If any individual rewrite fails,
+the entire `/rewrite` request fails; the endpoint does not return partial output.
 
 ## Search example
 
