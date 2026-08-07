@@ -1,14 +1,7 @@
-from typing import Annotated, Optional
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StringConstraints,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel
 
 from rewrite_queries import (
     ConfigurationError,
@@ -17,6 +10,7 @@ from rewrite_queries import (
     OllamaTimeoutError,
     rewrite_queries,
 )
+from rewrite_schema import RewriteRequest, RewriteResponse
 from temporal_search import temporal_search
 
 app = FastAPI(title="Temporal Search API")
@@ -33,43 +27,10 @@ class TemporalSearchRequest(BaseModel):
     objectThreshold: float = 0.5
 
 
-NonEmptyQuery = Annotated[
-    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
-]
-
-
-class RewriteRequest(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    modelname: str = Field(min_length=1, max_length=200)
-    common_query: Optional[str] = Field(default=None, max_length=8000)
-    query: list[NonEmptyQuery] = Field(min_length=1, max_length=32)
-
-    @field_validator('common_query', mode='before')
-    @classmethod
-    def normalize_empty_common_query(cls, value):
-        if isinstance(value, str) and not value.strip():
-            return None
-        return value
-
-    @model_validator(mode='after')
-    def limit_total_query_length(self):
-        if sum(len(item) for item in self.query) > 24000:
-            raise ValueError('query content must not exceed 24000 characters')
-        return self
-
-
-class RewriteResponse(BaseModel):
-    modelname: str
-    common_query: Optional[str]
-    query: list[str]
-
-
 @app.post('/rewrite', response_model=RewriteResponse)
 async def rewrite(request: RewriteRequest):
     try:
-        rewritten_queries = await rewrite_queries(
-            modelname=request.modelname,
+        analysis = await rewrite_queries(
             common_query=request.common_query,
             queries=request.query,
         )
@@ -86,11 +47,7 @@ async def rewrite(request: RewriteRequest):
     except OllamaServiceError as exc:
         raise HTTPException(status_code=502, detail='Ollama request failed') from exc
 
-    return RewriteResponse(
-        modelname=request.modelname,
-        common_query=request.common_query,
-        query=rewritten_queries,
-    )
+    return analysis
 
 
 @app.get("/")

@@ -1,7 +1,5 @@
-import asyncio
 import json
 import os
-import re
 import unittest
 from unittest.mock import patch
 
@@ -9,276 +7,460 @@ import httpx
 
 from rewrite_queries import (
     ConfigurationError,
+    DEFAULT_OLLAMA_MODEL,
     OllamaRateLimitError,
     OllamaServiceError,
     OllamaTimeoutError,
     SYSTEM_PROMPT,
-    build_rewrite_prompt,
+    build_analysis_prompt,
     rewrite_queries,
 )
 
 
+def analysis_payload(queries: list[str]) -> dict:
+    events = []
+    for index, query in enumerate(queries):
+        events.append(
+            {
+                'event_id': index,
+                'original_query': query,
+                'target_moment_vi': (
+                    'Trong màn múa lân, con lân màu vàng đen trắng thực hiện '
+                    f'hành động ở sự kiện {index}.'
+                ),
+                'retrieval_queries_vi': [
+                    'Con lân màu vàng đen trắng trong màn múa lân thực hiện '
+                    f'hành động ở sự kiện {index}.',
+                    'Khoảnh khắc trong màn múa lân khi lân màu vàng đen trắng '
+                    f'thực hiện sự kiện {index}.',
+                ],
+                'retrieval_queries_en': [
+                    'The yellow, black, and white lion performs the action '
+                    f'during a lion dance in event {index}.',
+                    'The lion-dance moment involving the yellow, black, and '
+                    f'white lion in event {index}.',
+                ],
+                'subject': 'con lân',
+                'action': 'thực hiện hành động',
+                'visible_state': 'hành động của con lân có thể nhìn thấy',
+                'boundary': 'start',
+                'temporal_relation': {
+                    'relation': 'sequence_start' if index == 0 else 'independent',
+                    'reference_event_id': None,
+                },
+                'required_entities': ['con lân'],
+                'soft_context': ['màn múa lân'],
+                'excluded_context': [],
+                'inferred_information': [
+                    'Từ common_query: lân có màu vàng, đen và trắng.'
+                ],
+                'ambiguities': [],
+            }
+        )
+    return {
+        'video_context': {
+            'scene': 'múa lân',
+            'main_entities': ['một con lân màu vàng, đen và trắng'],
+        },
+        'events': events,
+    }
+
+
 class RewritePromptTests(unittest.TestCase):
-    def test_prompt_supplies_shared_context_and_the_complete_event_sequence(self) -> None:
-        common_query = "Video biểu diễn múa lân màu vàng, đen và trắng."
+    def test_prompt_contains_the_complete_batch_and_json_schema(self) -> None:
+        common_query = 'Video múa lân màu vàng, đen và trắng.'
         queries = [
-            "E1: Lân bắt đầu xoay vòng trên cột số 4.",
-            "E2: Bốn chân của lân hoàn toàn chạm đất.",
-            "E3: Hai người biểu diễn cúi chào ban giám khảo.",
+            'Lân bắt đầu xoay vòng trên cột số 4.',
+            'Bốn chân của lân hoàn toàn chạm đất.',
         ]
 
-        first_prompt = build_rewrite_prompt(queries, 0, common_query)
-        second_prompt = build_rewrite_prompt(queries, 1, common_query)
+        prompt = build_analysis_prompt(queries, common_query)
 
-        for prompt in (first_prompt, second_prompt):
-            self.assertIn(common_query, prompt)
-            for query in queries:
-                self.assertIn(query, prompt)
+        self.assertIn(common_query, prompt)
+        for index, query in enumerate(queries):
+            self.assertIn(query, prompt)
+            self.assertIn(f'"event_id": {index}', prompt)
+        self.assertIn('<OUTPUT_JSON_SCHEMA>', prompt)
+        self.assertIn('<REQUIRED_STANDALONE_CONTEXT>', prompt)
+        self.assertIn('"video_context"', prompt)
+        self.assertIn('"retrieval_queries_en"', prompt)
 
-        # Changing only the target must change the instruction while retaining the
-        # surrounding events that give the target its meaning.
-        self.assertNotEqual(first_prompt, second_prompt)
+    def test_prompt_treats_missing_common_query_as_empty_data(self) -> None:
+        prompt = build_analysis_prompt(['Một sự kiện độc lập.'])
 
-    def test_prompt_does_not_render_missing_context_as_literal_none(self) -> None:
-        prompt = build_rewrite_prompt(["E1: Một sự kiện độc lập."], 0)
+        self.assertNotIn('None', prompt)
+        self.assertIn('"common_query": ""', prompt)
+        self.assertIn('Một sự kiện độc lập.', prompt)
 
-        self.assertNotIn("None", prompt)
-        self.assertIn("E1: Một sự kiện độc lập.", prompt)
+    def test_system_prompt_requires_standalone_grounded_events(self) -> None:
+        normalized = ' '.join(SYSTEM_PROMPT.lower().split())
 
-    def test_required_context_terms_exclude_search_instruction_words(self) -> None:
-        prompt = build_rewrite_prompt(
-            ["Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."],
-            0,
-            "Đoạn video múa lân màu vàng đen trắng, tìm các sự kiện sau",
-        )
-        match = re.search(
-            r"<REQUIRED_CONTEXT_TERMS>\s*(.*?)\s*</REQUIRED_CONTEXT_TERMS>",
-            prompt,
-            flags=re.DOTALL,
-        )
-
-        self.assertIsNotNone(match)
-        terms = {term.strip() for term in match.group(1).split(",")}
-        self.assertNotIn("kiện", terms)
-        self.assertTrue({"múa", "lân", "vàng", "đen", "trắng"}.issubset(terms))
-
-    def test_prompt_requires_context_expansion_instead_of_shallow_proofreading(self) -> None:
-        common_query = (
-            "Đoạn video biểu diễn múa lân với một con lân màu vàng, đen và trắng."
-        )
-        prompt = build_rewrite_prompt(
-            ["Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."],
-            0,
-            common_query,
-        )
-        system_instruction = " ".join(SYSTEM_PROMPT.lower().split())
-        target_instruction = " ".join(prompt.lower().split())
-
-        # Weak models otherwise tend to only change digits or polish grammar. The
-        # contract must explicitly require a missing identifying detail from the
-        # shared context to appear in the standalone result.
-        self.assertRegex(
-            system_instruction,
-            r"không phải.{0,100}(?:sửa|hiệu đính)",
-        )
-        self.assertRegex(
-            system_instruction,
-            r"common_query.{0,300}(?:chi tiết|đặc điểm|thuộc tính) nhận diện",
-        )
-        self.assertRegex(
-            target_instruction,
-            r"bắt buộc.{0,240}(?:common_query|common_context)",
-        )
-        self.assertIn(common_query.lower(), target_instruction)
+        self.assertIn('tự đủ nghĩa', normalized)
+        self.assertIn('không phải chỉ dẫn', normalized)
+        self.assertIn('đúng hai truy vấn truy hồi tiếng việt', normalized)
+        self.assertIn('original_query phải sao chép chính xác', normalized)
 
 
 class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
-    api_url = "https://ollama.test/api/chat"
+    api_url = 'https://ollama.test/api/chat'
 
-    async def test_rewrites_each_query_in_order_using_ollama_chat_api(self) -> None:
-        common_query = "Video biểu diễn múa lân màu vàng, đen và trắng."
+    async def test_sends_one_batch_request_and_uses_server_model(self) -> None:
+        common_query = 'Video múa lân màu vàng, đen và trắng.'
         queries = [
-            "E1: Lân bắt đầu xoay vòng trên cột số 4.",
-            "E2: Bốn chân của lân hoàn toàn chạm đất.",
+            'Lân bắt đầu xoay vòng trên cột số 4.',
+            'Bốn chân của lân hoàn toàn chạm đất.',
         ]
-        rewritten = [
-            "Trong màn múa lân của con lân màu vàng, đen và trắng, con lân "
-            "bắt đầu xoay vòng trên cột số 4.",
-            "Trong màn múa lân của con lân màu vàng, đen và trắng, cả bốn chân "
-            "của con lân chạm đất sau khi rời cột.",
-        ]
+        expected = analysis_payload(queries)
         requests: list[httpx.Request] = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             return httpx.Response(
                 200,
-                json={"message": {"role": "assistant", "content": rewritten[len(requests) - 1]}},
+                json={
+                    'message': {
+                        'role': 'assistant',
+                        'content': json.dumps(expected, ensure_ascii=False),
+                    }
+                },
             )
 
-        result = await rewrite_queries(
-            modelname="qwen3:8b",
-            common_query=common_query,
-            queries=queries,
-            api_key="test-api-key",
-            api_url=self.api_url,
-            transport=httpx.MockTransport(handler),
-        )
+        with patch.dict(os.environ, {'OLLAMA_MODEL': 'qwen3:8b'}):
+            result = await rewrite_queries(
+                common_query=common_query,
+                queries=queries,
+                api_key='test-api-key',
+                api_url=self.api_url,
+                transport=httpx.MockTransport(handler),
+            )
 
-        self.assertEqual(result, rewritten)
-        self.assertEqual(len(requests), len(queries))
-        for index, request in enumerate(requests):
-            with self.subTest(index=index):
-                self.assertEqual(request.method, "POST")
-                self.assertEqual(str(request.url), self.api_url)
-                self.assertEqual(request.headers["Authorization"], "Bearer test-api-key")
-                body = json.loads(request.content)
-                self.assertEqual(body["model"], "qwen3:8b")
-                self.assertIs(body["stream"], False)
-                self.assertIs(body["think"], False)
-                self.assertEqual(body["options"]["temperature"], 0)
-                prompt = "\n".join(message["content"] for message in body["messages"])
-                self.assertIn(common_query, prompt)
-                for query in queries:
-                    self.assertIn(query, prompt)
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request.method, 'POST')
+        self.assertEqual(str(request.url), self.api_url)
+        self.assertEqual(request.headers['Authorization'], 'Bearer test-api-key')
+        body = json.loads(request.content)
+        self.assertEqual(body['model'], 'qwen3:8b')
+        self.assertIs(body['stream'], False)
+        self.assertEqual(body['think'], 'low')
+        self.assertEqual(body['options']['temperature'], 0)
+        self.assertNotIn('format', body)
+        prompt = '\n'.join(message['content'] for message in body['messages'])
+        self.assertIn(common_query, prompt)
+        for query in queries:
+            self.assertIn(query, prompt)
 
-        self.assertNotEqual(requests[0].content, requests[1].content)
+    async def test_uses_default_model_when_environment_value_is_blank(self) -> None:
+        query = 'Một sự kiện.'
+        seen_model = None
 
-    async def test_retries_a_shallow_rewrite_that_omits_common_context(self) -> None:
-        common_query = (
-            "Đoạn video biểu diễn múa lân với một con lân màu vàng, đen và trắng."
-        )
-        query = "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."
-        shallow_draft = "Khoảnh khắc đầu tiên bốn chân của con lân hoàn toàn chạm đất."
-        enriched_draft = (
-            "Trong đoạn video biểu diễn múa lân với một con lân màu vàng, đen và "
-            "trắng, khoảnh khắc đầu tiên cả bốn chân của con lân hoàn toàn chạm đất."
-        )
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal seen_model
+            seen_model = json.loads(request.content)['model']
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(
+                            analysis_payload([query]), ensure_ascii=False
+                        )
+                    }
+                },
+            )
+
+        with patch.dict(os.environ, {'OLLAMA_MODEL': ''}):
+            await rewrite_queries(
+                queries=[query],
+                api_key='test-api-key',
+                api_url=self.api_url,
+                transport=httpx.MockTransport(handler),
+            )
+
+        self.assertEqual(seen_model, DEFAULT_OLLAMA_MODEL)
+
+    async def test_retries_the_complete_batch_after_schema_failure(self) -> None:
+        queries = ['Sự kiện thứ nhất.', 'Sự kiện thứ hai.']
+        expected = analysis_payload(queries)
         requests: list[httpx.Request] = []
 
         async def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            content = shallow_draft if len(requests) == 1 else enriched_draft
-            return httpx.Response(200, json={"message": {"content": content}})
+            content = (
+                '{"video_context": {"scene": "múa lân"}}'
+                if len(requests) == 1
+                else json.dumps(expected, ensure_ascii=False)
+            )
+            return httpx.Response(200, json={'message': {'content': content}})
 
         result = await rewrite_queries(
-            modelname="gpt-oss:20b",
-            common_query=common_query,
-            queries=[query],
-            api_key="test-api-key",
+            queries=queries,
+            api_key='test-api-key',
             api_url=self.api_url,
             transport=httpx.MockTransport(handler),
         )
 
-        self.assertEqual(result, [enriched_draft])
+        self.assertEqual(result.model_dump(), expected)
         self.assertEqual(len(requests), 2)
-        retry_body = json.loads(requests[1].content)
-        retry_prompt = "\n".join(
-            message["content"] for message in retry_body["messages"]
-        )
-        self.assertIn(shallow_draft, retry_prompt)
-        self.assertIn(common_query, retry_prompt)
+        retry_prompt = json.loads(requests[1].content)['messages'][1]['content']
+        self.assertIn('<PREVIOUS_INVALID_RESPONSE>', retry_prompt)
+        self.assertIn('<SERVER_VALIDATION_ERRORS>', retry_prompt)
+        for query in queries:
+            self.assertIn(query, retry_prompt)
 
-    async def test_fallback_prepends_clean_common_context_after_two_shallow_drafts(
-        self,
-    ) -> None:
-        common_query = (
-            "Đoạn video múa lân một con lân màu vàng đen trắng, tìm các sự kiện sau"
-        )
-        drafts = [
-            "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên.",
-            "Khoảnh khắc đầu tiên bốn chân của lân hoàn toàn chạm đất.",
-        ]
+    async def test_rejects_invalid_structured_output_after_retry(self) -> None:
         request_count = 0
 
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal request_count
-            content = drafts[request_count]
             request_count += 1
-            return httpx.Response(200, json={"message": {"content": content}})
+            return httpx.Response(
+                200, json={'message': {'content': '{"events": []}'}}
+            )
+
+        with self.assertRaisesRegex(
+            OllamaServiceError, 'invalid structured analysis'
+        ):
+            await rewrite_queries(
+                queries=['Một sự kiện.'],
+                api_key='test-api-key',
+                api_url=self.api_url,
+                transport=httpx.MockTransport(handler),
+            )
+
+        self.assertEqual(request_count, 2)
+
+    async def test_restores_original_query_without_an_extra_model_call(
+        self,
+    ) -> None:
+        query = 'Chuỗi gốc phải được giữ nguyên.'
+        invalid = analysis_payload([query])
+        invalid['events'][0]['original_query'] = 'Chuỗi đã bị sửa.'
+        expected = analysis_payload([query])
+        request_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            content = invalid if request_count == 1 else expected
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(content, ensure_ascii=False)
+                    }
+                },
+            )
 
         result = await rewrite_queries(
-            modelname="gpt-oss:20b",
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.events[0].original_query, query)
+        self.assertEqual(request_count, 1)
+
+    async def test_retries_when_standalone_text_omits_common_context(self) -> None:
+        common_query = 'Video múa lân với lân màu vàng đen trắng.'
+        query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
+        invalid = analysis_payload([query])
+        invalid['events'][0]['target_moment_vi'] = (
+            'Khoảnh khắc bốn chân chạm đất.'
+        )
+        invalid['events'][0]['retrieval_queries_vi'] = [
+            'Bốn chân chạm đất hoàn toàn.',
+            'Chủ thể vừa chạm đất.',
+        ]
+        expected = analysis_payload([query])
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            content = invalid if len(requests) == 1 else expected
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(content, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
             common_query=common_query,
-            queries=[drafts[0]],
-            api_key="test-api-key",
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(len(requests), 2)
+        retry_prompt = json.loads(requests[1].content)['messages'][1]['content']
+        self.assertIn('shared context terms', retry_prompt)
+
+    async def test_retries_when_inherited_context_is_not_reported(self) -> None:
+        common_query = 'Video múa lân với lân màu vàng đen trắng.'
+        query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
+        invalid = analysis_payload([query])
+        invalid['events'][0]['inferred_information'] = []
+        expected = analysis_payload([query])
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            content = invalid if len(requests) == 1 else expected
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(content, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
+            common_query=common_query,
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(len(requests), 2)
+        retry_prompt = json.loads(requests[1].content)['messages'][1]['content']
+        self.assertIn('inferred_information', retry_prompt)
+
+    async def test_repairs_context_after_two_semantic_failures(self) -> None:
+        common_query = (
+            'Đoạn video múa lân một con lân màu vàng đen trắng, '
+            'tìm các sự kiện sau'
+        )
+        query = 'Khoảnh khắc đầu tiên con rồng cử động đầu.'
+        shallow = analysis_payload([query])
+        shallow['events'][0]['target_moment_vi'] = (
+            'Khoảnh khắc đầu tiên con rồng cử động đầu.'
+        )
+        shallow['events'][0]['retrieval_queries_vi'] = [
+            'Con rồng bắt đầu cử động đầu.',
+            'Đầu con rồng vừa chuyển động.',
+        ]
+        shallow['events'][0]['inferred_information'] = []
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(shallow, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
+            common_query=common_query,
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(len(requests), 2)
+        event = result.events[0]
+        self.assertIn('múa lân', event.target_moment_vi)
+        self.assertTrue(
+            all('múa lân' in item for item in event.retrieval_queries_vi)
+        )
+        self.assertNotIn(
+            'tìm các sự kiện sau', event.target_moment_vi.casefold()
+        )
+        self.assertTrue(event.inferred_information)
+
+    async def test_uses_saved_candidate_when_repair_response_is_malformed(
+        self,
+    ) -> None:
+        common_query = 'Video múa lân màu vàng đen trắng.'
+        query = 'Khoảnh khắc đầu tiên con rồng cử động đầu.'
+        shallow = analysis_payload([query])
+        shallow['events'][0]['target_moment_vi'] = 'Con rồng cử động đầu.'
+        shallow['events'][0]['retrieval_queries_vi'] = [
+            'Con rồng cử động đầu.',
+            'Đầu con rồng chuyển động.',
+        ]
+        shallow['events'][0]['inferred_information'] = []
+        request_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            content = (
+                json.dumps(shallow, ensure_ascii=False)
+                if request_count == 1
+                else 'not json'
+            )
+            return httpx.Response(200, json={'message': {'content': content}})
+
+        result = await rewrite_queries(
+            common_query=common_query,
+            queries=[query],
+            api_key='test-api-key',
             api_url=self.api_url,
             transport=httpx.MockTransport(handler),
         )
 
         self.assertEqual(request_count, 2)
-        self.assertEqual(
-            result,
-            [
-                "Đoạn video múa lân một con lân màu vàng đen trắng. "
-                + drafts[1]
-            ],
-        )
-        self.assertNotIn("tìm các sự kiện sau", result[0].lower())
+        self.assertIn('múa lân', result.events[0].target_moment_vi)
 
-    async def test_preserves_input_order_when_responses_finish_out_of_order(
-        self,
-    ) -> None:
-        common_query = "Đoạn video múa lân màu vàng, đen và trắng."
-        queries = [
-            "E1: Lân bắt đầu xoay vòng trên cột số 4.",
-            "E2: Bốn chân của lân hoàn toàn chạm đất.",
-            "E3: Hai người biểu diễn lân cúi chào ban giám khảo.",
-        ]
-        rewritten = [
-            f"{common_query} Sự kiện cần tìm: {query}" for query in queries
-        ]
-        completion_order: list[int] = []
+    async def test_retries_a_transient_upstream_error(self) -> None:
+        query = 'Một sự kiện.'
+        expected = analysis_payload([query])
+        request_count = 0
 
         async def handler(request: httpx.Request) -> httpx.Response:
-            body = json.loads(request.content)
-            prompt = "\n".join(
-                message["content"] for message in body["messages"]
-            )
-            match = re.search(
-                r"<TARGET_QUERY>\s*(.*?)\s*</TARGET_QUERY>",
-                prompt,
-                flags=re.DOTALL,
-            )
-            self.assertIsNotNone(match, "request prompt must identify its target query")
-            index = queries.index(match.group(1))
-            await asyncio.sleep((0.03, 0.01, 0.0)[index])
-            completion_order.append(index)
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                return httpx.Response(503, json={'error': 'temporary'})
             return httpx.Response(
                 200,
-                json={"message": {"content": rewritten[index]}},
+                json={
+                    'message': {
+                        'content': json.dumps(expected, ensure_ascii=False)
+                    }
+                },
             )
 
         result = await rewrite_queries(
-            modelname="gpt-oss:20b",
-            common_query=common_query,
-            queries=queries,
-            api_key="test-api-key",
+            queries=[query],
+            api_key='test-api-key',
             api_url=self.api_url,
             transport=httpx.MockTransport(handler),
         )
 
-        self.assertEqual(completion_order, [2, 1, 0])
-        self.assertEqual(result, rewritten)
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(request_count, 2)
 
-    async def test_missing_api_key_raises_configuration_error_before_request(self) -> None:
+    async def test_missing_api_key_raises_before_request(self) -> None:
         called = False
 
         async def handler(request: httpx.Request) -> httpx.Response:
             nonlocal called
             called = True
-            return httpx.Response(200, json={"message": {"content": "unused"}})
+            return httpx.Response(200)
 
         with patch.dict(os.environ, {}, clear=True), patch(
-            "rewrite_queries.load_dotenv", return_value=False
+            'rewrite_queries.load_dotenv', return_value=False
         ):
             with self.assertRaisesRegex(
-                ConfigurationError, "OLLAMA_API_KEY is not configured"
+                ConfigurationError, 'OLLAMA_API_KEY is not configured'
             ):
                 await rewrite_queries(
-                    modelname="qwen3:8b",
-                    common_query=None,
-                    queries=["E1: Một sự kiện."],
+                    queries=['Một sự kiện.'],
                     api_key=None,
                     api_url=self.api_url,
                     transport=httpx.MockTransport(handler),
@@ -288,42 +470,42 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_is_translated_to_domain_error(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
-            raise httpx.ReadTimeout("too slow", request=request)
+            raise httpx.ReadTimeout('too slow', request=request)
 
         with self.assertRaises(OllamaTimeoutError):
             await self._call_with_transport(httpx.MockTransport(handler))
 
     async def test_rate_limit_is_translated_to_domain_error(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(429, json={"error": "too many requests"})
+            return httpx.Response(429, json={'error': 'too many requests'})
 
         with self.assertRaises(OllamaRateLimitError):
             await self._call_with_transport(httpx.MockTransport(handler))
 
     async def test_other_http_errors_are_translated_to_service_error(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(500, json={"error": "backend unavailable"})
+            return httpx.Response(500, json={'error': 'backend unavailable'})
 
         with self.assertRaises(OllamaServiceError):
             await self._call_with_transport(httpx.MockTransport(handler))
 
     async def test_empty_assistant_content_is_rejected(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json={"message": {"content": "   "}})
+            return httpx.Response(200, json={'message': {'content': '   '}})
 
         with self.assertRaises(OllamaServiceError):
             await self._call_with_transport(httpx.MockTransport(handler))
 
-    async def _call_with_transport(self, transport: httpx.AsyncBaseTransport) -> list[str]:
+    async def _call_with_transport(
+        self, transport: httpx.AsyncBaseTransport
+    ):
         return await rewrite_queries(
-            modelname="qwen3:8b",
-            common_query=None,
-            queries=["E1: Một sự kiện."],
-            api_key="test-api-key",
+            queries=['Một sự kiện.'],
+            api_key='test-api-key',
             api_url=self.api_url,
             transport=transport,
         )
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

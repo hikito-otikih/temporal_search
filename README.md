@@ -87,75 +87,121 @@ curl http://127.0.0.1:8001/
 
 ## Rewrite queries with Ollama
 
-`POST /rewrite` rewrites each event query into a self-contained sentence so it
-still carries the video's overall semantic context when used on its own.
+`POST /rewrite` analyzes all event queries as one batch and returns structured
+video context, standalone target moments, Vietnamese/English retrieval queries,
+visible states, temporal boundaries, relations, inferred facts, and ambiguities.
 
 Create a `.env` file in the project root before starting the API:
 
 ```dotenv
 OLLAMA_API_KEY=your-ollama-api-key
 OLLAMA_API_URL=https://ollama.com/api/chat
+OLLAMA_MODEL=gpt-oss:20b
 ```
 
-`OLLAMA_API_KEY` is required. `OLLAMA_API_URL` is optional and defaults to
-`https://ollama.com/api/chat`. Do not commit a real API key to source control.
+`OLLAMA_API_KEY` is required. `OLLAMA_API_URL` and `OLLAMA_MODEL` are
+optional; they default to `https://ollama.com/api/chat` and `gpt-oss:20b`.
+The model is server configuration and cannot be selected in the request. Do not
+commit a real API key to source control.
 
 Example request:
 
 ```json
 {
-  "modelname": "gpt-oss:20b",
-  "common_query": "Đoạn video múa lân với một con lân màu vàng, đen và trắng.",
+  "common_query": "Đoạn video múa lân một con lân màu vàng đen trắng, tìm các sự kiện sau",
   "query": [
-    "E1: Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
-    "E2: Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."
+    "Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
+    "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."
   ]
 }
 ```
 
-Illustrative response (exact wording depends on the selected model):
+Illustrative response (exact wording depends on the configured model):
 
 ```json
 {
-  "modelname": "gpt-oss:20b",
-  "common_query": "Đoạn video múa lân với một con lân màu vàng, đen và trắng.",
-  "query": [
-    "E1: Trong đoạn video múa lân với một con lân màu vàng, đen và trắng, khoảnh khắc đầu tiên con lân bắt đầu xoay vòng trên cột số 4 bằng hai chân trước trước khi tiếp đất.",
-    "E2: Trong đoạn video múa lân với một con lân màu vàng, đen và trắng, khoảnh khắc đầu tiên cả bốn chân của con lân chạm hoàn toàn xuống đất."
+  "video_context": {
+    "scene": "múa lân",
+    "main_entities": [
+      "một con lân màu vàng, đen và trắng"
+    ]
+  },
+  "events": [
+    {
+      "event_id": 0,
+      "original_query": "Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
+      "target_moment_vi": "Trong màn múa lân, khoảnh khắc đầu tiên con lân màu vàng, đen và trắng bắt đầu xoay vòng trên cột số 4 bằng hai chân trước.",
+      "retrieval_queries_vi": [
+        "Khoảnh khắc bắt đầu xoay vòng của con lân màu vàng, đen và trắng trên cột số 4 bằng hai chân trước.",
+        "Con lân vàng, đen và trắng vừa bắt đầu xoay trên cột số 4 trong màn múa lân."
+      ],
+      "retrieval_queries_en": [
+        "The first moment the yellow, black, and white lion starts spinning on pillar number 4 using its two front legs.",
+        "A yellow, black, and white lion beginning its spin on pillar number 4 during a lion dance."
+      ],
+      "subject": "con lân màu vàng, đen và trắng",
+      "action": "bắt đầu xoay vòng trên cột số 4 bằng hai chân trước",
+      "visible_state": "hai chân trước của lân ở trên cột số 4 và cơ thể vừa bắt đầu chuyển động xoay",
+      "boundary": "start",
+      "temporal_relation": {
+        "relation": "sequence_start",
+        "reference_event_id": null
+      },
+      "required_entities": [
+        "con lân màu vàng, đen và trắng",
+        "cột số 4"
+      ],
+      "soft_context": [
+        "màn múa lân"
+      ],
+      "excluded_context": [
+        "khoảnh khắc lân đã tiếp đất"
+      ],
+      "inferred_information": [
+        "Màu sắc của con lân được lấy từ common_query."
+      ],
+      "ambiguities": []
+    }
   ]
 }
 ```
 
 ### Rewrite behavior
 
-- `modelname` is passed to Ollama as the model to use.
 - `common_query` is optional. A blank value is treated as omitted.
-- The API normally makes one Ollama request for each `query` item. Every request
-  receives `common_query` and the full input list as context, but instructs the
-  model to rewrite only one target event. Calls may run concurrently, up to four
-  at once.
-- A draft that omits the identifying details from `common_query` is rejected and
-  retried once with explicit feedback about the missing context. If both model
-  drafts remain too shallow, the cleaned common context is prepended so the
-  returned query is still self-contained.
-- Each rewritten event must be understandable by itself. Results preserve the
-  input order and the response echoes `modelname` and `common_query`.
-- Without `common_query`, the other query items still provide context for each
-  independent rewrite.
+- The API makes one Ollama request for the complete event batch, allowing the
+  model to resolve shared entities and explicit cross-event relations.
+- Every `target_moment_vi` and retrieval query is required to be understandable
+  on its own. The response preserves the event count, order, IDs, and exact
+  `original_query` strings.
+- The server validates the complete response against strict Pydantic schemas,
+  checks source alignment and distinct retrieval queries, then retries the full
+  batch once with validation feedback if needed.
+- If both model drafts are structurally valid but a lexical context check is
+  still too strict, the server keeps the valid candidate and deterministically
+  adds the cleaned `common_query` context instead of returning a false `502`.
+- Temporary connection failures and upstream `408`, `425`, or `5xx`
+  responses are retried once.
+- Each event contains exactly two Vietnamese and two English retrieval queries.
+- Ollama Cloud does not currently support the structured-output `format` field,
+  so the JSON Schema is included in the prompt and enforced again by the server.
 
 ### Rewrite errors
 
-- `422` indicates invalid input. `modelname` and all query strings must be
-  non-empty; `query` must contain 1-32 items. Each query is limited to 4,000
-  characters, all queries together to 24,000, and `common_query` to 8,000.
+- `422` indicates invalid input. `query` must contain 1-32 non-empty strings.
+  Each query is limited to 4,000 characters, all queries together to 24,000,
+  and `common_query` to 8,000. Unknown fields, including `modelname` and
+  `model_name`, are rejected.
 - `500` indicates that `OLLAMA_API_KEY` is not configured.
-- `502` indicates an Ollama connection failure, error response, or malformed or
-  empty response.
+- `502` indicates a non-recoverable Ollama connection/error response or that
+  no structurally valid output was available after the validation retry.
 - `503` indicates that Ollama rate-limited the request.
 - `504` indicates that the Ollama request timed out.
 
-Errors use FastAPI's standard `detail` field. If any individual rewrite fails,
-the entire `/rewrite` request fails; the endpoint does not return partial output.
+Errors use FastAPI's standard `detail` field. The endpoint never returns a
+partially validated batch. Safe server logs distinguish upstream failures,
+structural validation failures, semantic retries, and context fallback without
+logging the API key or raw model output.
 
 ## Search example
 
