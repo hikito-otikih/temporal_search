@@ -312,10 +312,10 @@ class PyAVFrameDecoder:
                 duration_ms = _pyav_duration_ms(container, stream)
                 for target_ms in pts_ms:
                     if duration_ms is not None and target_ms > duration_ms:
-                        raise FrameRequestError(
-                            f"requested PTS {target_ms}ms exceeds video duration "
-                            f"{duration_ms}ms for {video_path.name}"
-                        )
+                        # Region boundaries can come from upstream keyframe
+                        # timestamps that slightly exceed the real media
+                        # duration; decode the last frame instead of aborting.
+                        target_ms = duration_ms
                     frame = self._decode_nearest(container, stream, target_ms)
                     if frame is None:
                         raise FrameDecodeError(
