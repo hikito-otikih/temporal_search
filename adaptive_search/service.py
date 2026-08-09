@@ -63,15 +63,19 @@ class AdaptiveSearchService:
         searcher_type: SearcherType = "adaptive_temporal",
         hyperparameters: SearchHyperparameters | None = None,
         constraints: SearchConstraints | None = None,
+        retrieval_variants: dict[str, list[str]] | None = None,
     ) -> SessionBundle:
         selected_constraints = constraints or SearchConstraints()
         _validate_constraints_for_events(events, selected_constraints)
+        selected_variants = dict(retrieval_variants or {})
+        _validate_retrieval_variants(events, selected_variants)
         return self.repository.create(
             events=events,
             common_query=common_query,
             searcher_type=searcher_type,
             hyperparameters=hyperparameters or SearchHyperparameters(),
             constraints=selected_constraints,
+            retrieval_variants=selected_variants,
         )
 
     def get_session(self, session_id: str) -> SessionBundle:
@@ -615,6 +619,27 @@ def _validate_event_subset(bundle: SessionBundle, event_ids: set[str]) -> None:
     missing = event_ids - known
     if missing:
         raise AdaptiveInputError(f"unknown event_ids: {sorted(missing)}")
+
+
+def _validate_retrieval_variants(
+    events: list[EventDefinition],
+    variants: dict[str, list[str]],
+) -> None:
+    known = {event.event_id for event in events}
+    unknown_events = set(variants) - known
+    if unknown_events:
+        raise AdaptiveInputError(
+            f"retrieval_variants reference unknown events: {sorted(unknown_events)}"
+        )
+    for event_id, texts in variants.items():
+        if not texts:
+            raise AdaptiveInputError(
+                f"retrieval_variants for {event_id!r} must not be empty"
+            )
+        if any(not text.strip() for text in texts):
+            raise AdaptiveInputError(
+                f"retrieval_variants for {event_id!r} must not contain empty text"
+            )
 
 
 def _ensure_unique_ids(ids: Iterable[str], label: str) -> None:

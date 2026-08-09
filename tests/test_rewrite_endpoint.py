@@ -38,6 +38,18 @@ def analysis_result(queries: list[str]) -> RewriteResponse:
                     'subject': 'con lân',
                     'action': 'thực hiện hành động',
                     'visible_state': 'hành động của con lân có thể nhìn thấy',
+                    'anchor_query': (
+                        'Con lân màu vàng đen trắng trong màn múa lân thực '
+                        f'hiện hành động ở sự kiện {index}.'
+                    ),
+                    'pre_state': (
+                        f'Ngay trước sự kiện {index}, con lân chưa thực hiện '
+                        'hành động đích.'
+                    ),
+                    'post_state': (
+                        f'Ngay sau sự kiện {index}, con lân vừa hoàn thành '
+                        'hành động đích.'
+                    ),
                     'boundary': 'start',
                     'temporal_relation': {
                         'relation': (

@@ -84,6 +84,9 @@ class RewrittenEvent(StrictSchema):
     subject: NonEmptyText
     action: NonEmptyText
     visible_state: NonEmptyText
+    anchor_query: NonEmptyText
+    pre_state: NonEmptyText
+    post_state: NonEmptyText
     boundary: Boundary
     temporal_relation: TemporalRelation
     required_entities: list[NonEmptyText] = Field(max_length=32)

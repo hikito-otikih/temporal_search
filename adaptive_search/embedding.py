@@ -76,6 +76,52 @@ def l2_normalize(vectors: np.ndarray) -> np.ndarray:
     return array / norms
 
 
+def _siglip_feature_array(
+    output: Any,
+    *,
+    expected_rows: int,
+    expected_dimension: int,
+    modality: str,
+) -> np.ndarray:
+    """Normalize SigLIP features across Transformers output conventions.
+
+    Transformers 5 returns ``BaseModelOutputWithPooling`` from SigLIP2's
+    ``get_*_features`` helpers, while older releases returned the pooled tensor
+    directly. Callers force ``return_dict=True`` so a tuple cannot be confused
+    with the rank-2 pooled representation.
+    """
+
+    feature_tensor = output if hasattr(output, "detach") else None
+    if feature_tensor is None:
+        feature_tensor = getattr(output, "pooler_output", None)
+    if feature_tensor is None or not hasattr(feature_tensor, "detach"):
+        raise EmbeddingConfigurationError(
+            f"SigLIP2 {modality} encoder returned no pooled feature tensor"
+        )
+
+    try:
+        array = np.asarray(
+            feature_tensor.detach().float().cpu().numpy(),
+            dtype=np.float32,
+        )
+    except Exception as exc:
+        raise EmbeddingConfigurationError(
+            f"could not convert SigLIP2 {modality} features to an array"
+        ) from exc
+    expected_shape = (expected_rows, expected_dimension)
+    if array.shape != expected_shape:
+        raise EmbeddingConfigurationError(
+            f"SigLIP2 {modality} feature shape must be {expected_shape}, "
+            f"got {array.shape}"
+        )
+    try:
+        return l2_normalize(array)
+    except ValueError as exc:
+        raise EmbeddingConfigurationError(
+            f"SigLIP2 {modality} features are not cosine-compatible"
+        ) from exc
+
+
 def truncate_mrl(vectors: np.ndarray, dimension: int) -> np.ndarray:
     """Truncate Matryoshka embeddings and normalize the truncated prefix.
 
@@ -214,8 +260,13 @@ class Siglip2Embedder:
             return_tensors="pt",
         ).to(self._device)
         with self._torch.inference_mode():
-            features = self._model.get_text_features(**inputs)
-        return l2_normalize(features.detach().float().cpu().numpy())
+            features = self._model.get_text_features(**inputs, return_dict=True)
+        return _siglip_feature_array(
+            features,
+            expected_rows=len(texts),
+            expected_dimension=self.output_dimension,
+            modality="text",
+        )
 
     def encode_images(self, images: Sequence[Any]) -> np.ndarray:
         if not images:
@@ -224,8 +275,13 @@ class Siglip2Embedder:
             self._device
         )
         with self._torch.inference_mode():
-            features = self._model.get_image_features(**inputs)
-        return l2_normalize(features.detach().float().cpu().numpy())
+            features = self._model.get_image_features(**inputs, return_dict=True)
+        return _siglip_feature_array(
+            features,
+            expected_rows=len(images),
+            expected_dimension=self.output_dimension,
+            modality="image",
+        )
 
 
 class Qwen3VLEmbedderAdapter:

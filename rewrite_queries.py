@@ -98,9 +98,10 @@ MỤC TIÊU:
 
 NGÔN NGỮ ĐẦU RA:
 - Chỉ retrieval_queries_en được viết bằng tiếng Anh.
-- video_context, target_moment_vi, retrieval_queries_vi, subject, action,
-  visible_state, required_entities, soft_context, excluded_context,
-  inferred_information và ambiguities bắt buộc viết bằng tiếng Việt.
+- video_context, target_moment_vi, retrieval_queries_vi, anchor_query,
+  pre_state, post_state, subject, action, visible_state, required_entities,
+  soft_context, excluded_context, inferred_information và ambiguities bắt
+  buộc viết bằng tiếng Việt.
 - original_query là ngoại lệ: sao chép nguyên văn input, không dịch.
 - Các từ tiếng Anh như lion, dragon, performers, judges, start rotating hoặc
   head movement trong field tiếng Việt làm response không hợp lệ.
@@ -162,6 +163,13 @@ QUY TẮC GROUNDING:
 - subject: chủ thể trung tâm tại khoảnh khắc đích.
 - action: hành động dùng để xác định khoảnh khắc.
 - visible_state: trạng thái có thể quan sát trực tiếp trong frame đích.
+- anchor_query: truy vấn truy hồi chính bằng tiếng Việt, tự đủ nghĩa như một
+  câu retrieval độc lập cho khoảnh khắc đích; giàu từ khóa thị giác và là bản
+  rút gọn sắc nét nhất trong số các retrieval query của sự kiện.
+- pre_state: trạng thái quan sát được của cảnh và chủ thể ngay trước khoảnh
+  khắc đích, dùng làm điều kiện tiền đề của ranh giới.
+- post_state: trạng thái quan sát được của cảnh và chủ thể ngay sau khoảnh
+  khắc đích, dùng làm điều kiện kết thúc của ranh giới.
 - boundary chỉ nhận start, end, state, transition, interval hoặc unknown.
 - temporal_relation.relation chỉ nhận sequence_start, after, before, during,
   simultaneous, independent hoặc unknown.
@@ -191,6 +199,10 @@ QUY ƯỚC THỜI GIAN:
   boundary end; trạng thái đang diễn ra dùng state hoặc interval.
 - Các từ cuối/kết thúc trong phần setup không được lấn át từ đầu tiên/bắt đầu
   trong predicate đích khi chọn boundary.
+- pre_state và post_state phải mô tả trạng thái thị giác quan sát được ở hai
+  phía của khoảnh khắc đích. Với boundary start, pre_state là trạng thái ngay
+  trước khi predicate đích đúng lần đầu; với boundary end, post_state là trạng
+  thái ngay sau khi predicate đích không còn đúng.
 
 ĐẦU RA:
 - Chỉ xuất JSON object hợp lệ. Không Markdown, không code fence, không giải
@@ -348,6 +360,7 @@ def _validate_standalone_context(
     for index, event in enumerate(analysis.events):
         standalone_fields = [
             ('target_moment_vi', event.target_moment_vi),
+            ('anchor_query', event.anchor_query),
             *[
                 (f'retrieval_queries_vi[{query_index}]', query)
                 for query_index, query in enumerate(event.retrieval_queries_vi)
@@ -407,6 +420,12 @@ def _repair_standalone_context(
             event.target_moment_vi = (
                 f'{context_prefix}. {event.target_moment_vi}'
             )
+
+        if (
+            len(_matched_context_terms(event.anchor_query, context_terms))
+            < minimum_matches
+        ):
+            event.anchor_query = f'{context_prefix}. {event.anchor_query}'
 
         event.retrieval_queries_vi = [
             query

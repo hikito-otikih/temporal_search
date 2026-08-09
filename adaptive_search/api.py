@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from rewrite_queries import (
+    ConfigurationError,
+    OllamaRateLimitError,
+    OllamaServiceError,
+    OllamaTimeoutError,
+)
+from rewrite_schema import RewriteRequest
 
 from .embedding import (
     DEFAULT_SIGLIP2_MODEL,
@@ -27,6 +36,7 @@ from .refinement import (
     LiveRefinementOrchestrator,
     LiveRefinementUnavailableError,
 )
+from .rewrite_bridge import rewrite_queries_and_build_plan
 from .runtime import configure_from_environment
 from .service import AdaptiveInputError, AdaptiveSearchService
 from .session import (
@@ -35,11 +45,23 @@ from .session import (
     SessionBundle,
     SessionNotFoundError,
 )
+from .upstream import (
+    QueryVariant,
+    UpstreamSearchClient,
+    UpstreamSearchError,
+)
 
 
 router = APIRouter(prefix="/v1", tags=["adaptive temporal search"])
 adaptive_service = AdaptiveSearchService()
 live_refinement_orchestrator = LiveRefinementOrchestrator(adaptive_service)
+
+upstream_search_client = UpstreamSearchClient(
+    os.getenv("UPSTREAM_URL")
+    or os.getenv("ADAPTIVE_UPSTREAM_URL")
+    or os.getenv("UPSTREAM_SEARCH_URL")
+    or "http://172.26.176.1:8000"
+)
 
 
 @router.on_event("startup")
@@ -106,6 +128,11 @@ class FrameScoreIngestRequest(ApiModel):
     expected_revision: int = Field(ge=0)
     region_ids: list[str] = Field(min_length=1)
     samples: list[FrameScoreSample] = Field(min_length=1)
+
+
+class RetrieveSessionRequest(ApiModel):
+    top_k: int = Field(default=20, ge=1, le=10_000)
+    event_ids: list[str] | None = Field(default=None, min_length=1)
 
 
 class RefineSessionRequest(ApiModel):
@@ -225,25 +252,40 @@ def list_searchers():
 )
 def create_search_session(request: CreateSessionRequest):
     try:
-        hyperparameters = request.hyperparameters
-        if (
-            "embedding_model"
-            not in hyperparameters.refinement.model_fields_set
-        ):
-            runtime_spec = live_refinement_orchestrator.configured_runtime_spec()
-            if runtime_spec is not None:
-                refinement = hyperparameters.refinement.model_copy(
-                    update={"embedding_model": runtime_spec}
-                )
-                hyperparameters = hyperparameters.model_copy(
-                    update={"refinement": refinement}
-                )
+        hyperparameters = _apply_runtime_embedding_default(request.hyperparameters)
         bundle = adaptive_service.create_session(
             events=request.events,
             common_query=request.common_query,
             searcher_type=request.searcher_type,
             hyperparameters=hyperparameters,
             constraints=request.constraints,
+        )
+        return _session_response(bundle)
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+@router.post(
+    "/search-sessions/from-queries",
+    response_model=SessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_session_from_queries(request: RewriteRequest):
+    try:
+        plan = await rewrite_queries_and_build_plan(
+            queries=request.query,
+            common_query=request.common_query,
+        )
+        bundle = adaptive_service.create_session(
+            events=list(plan.events),
+            common_query=plan.common_query,
+            retrieval_variants={
+                event_id: list(texts)
+                for event_id, texts in plan.retrieval_variants.items()
+            },
+            hyperparameters=_apply_runtime_embedding_default(
+                SearchHyperparameters()
+            ),
         )
         return _session_response(bundle)
     except Exception as exc:
@@ -376,6 +418,33 @@ def refine_session(session_id: str, request: RefineSessionRequest):
             result.run,
             metrics=result.metrics,
         )
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+@router.post(
+    "/search-sessions/{session_id}/commands/retrieve",
+    response_model=RunResponse,
+)
+def retrieve_session(session_id: str, request: RetrieveSessionRequest):
+    try:
+        bundle = adaptive_service.get_session(session_id)
+        selected_events = request.event_ids or [
+            event.event_id for event in bundle.session.events
+        ]
+        variants = _build_query_variants(bundle, selected_events)
+        candidates = upstream_search_client.retrieve_candidates(
+            session_id=session_id,
+            variants=variants,
+            top_k=request.top_k,
+        )
+        bundle, run = adaptive_service.replace_candidates(
+            session_id,
+            expected_revision=bundle.session.revision,
+            event_ids=selected_events,
+            candidates=candidates,
+        )
+        return _run_response(bundle, run)
     except Exception as exc:
         _raise_api_error(exc)
 
@@ -569,6 +638,52 @@ def _session_response(bundle: SessionBundle) -> SessionResponse:
     )
 
 
+def _apply_runtime_embedding_default(
+    hyperparameters: SearchHyperparameters,
+) -> SearchHyperparameters:
+    if "embedding_model" in hyperparameters.refinement.model_fields_set:
+        return hyperparameters
+    runtime_spec = live_refinement_orchestrator.configured_runtime_spec()
+    if runtime_spec is None:
+        return hyperparameters
+    return hyperparameters.model_copy(
+        update={
+            "refinement": hyperparameters.refinement.model_copy(
+                update={"embedding_model": runtime_spec}
+            )
+        }
+    )
+
+
+def _build_query_variants(
+    bundle: SessionBundle,
+    event_ids: list[str],
+) -> list[QueryVariant]:
+    from .rewrite_bridge import variant_texts_for_events
+
+    known = {event.event_id for event in bundle.session.events}
+    if any(event_id not in known for event_id in event_ids):
+        raise AdaptiveInputError(
+            f"unknown event_ids: {sorted(set(event_ids) - known)}"
+        )
+    texts_by_event = variant_texts_for_events(
+        bundle.session.retrieval_variants,
+        bundle.session.events,
+        event_ids,
+    )
+    variants: list[QueryVariant] = []
+    for event_id in event_ids:
+        for index, text in enumerate(texts_by_event[event_id]):
+            variants.append(
+                QueryVariant(
+                    event_id=event_id,
+                    variant_id=f"{event_id}:v{index}",
+                    text=text,
+                )
+            )
+    return variants
+
+
 def _mutation_response(
     bundle: SessionBundle,
     invalidated: list[str],
@@ -618,6 +733,34 @@ def _page(items, offset: int, limit: int):
 
 
 def _raise_api_error(exc: Exception):
+    if isinstance(exc, ConfigurationError):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "ollama_not_configured",
+                "message": "OLLAMA_API_KEY is not configured",
+            },
+        ) from exc
+    if isinstance(exc, OllamaTimeoutError):
+        raise HTTPException(
+            status_code=504,
+            detail={"code": "ollama_timeout", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, OllamaRateLimitError):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "ollama_rate_limited", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, OllamaServiceError):
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "ollama_service_error", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, UpstreamSearchError):
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "upstream_search_error", "message": str(exc)},
+        ) from exc
     if isinstance(exc, LiveRefinementUnavailableError):
         raise HTTPException(
             status_code=503,

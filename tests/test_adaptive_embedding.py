@@ -1,14 +1,75 @@
 import unittest
+from types import SimpleNamespace
 
 import numpy as np
 
 from adaptive_search.embedding import (
+    EmbeddingConfigurationError,
     Qwen3VLEmbedderAdapter,
+    Siglip2Embedder,
     cosine_scores,
     image_embedding_cache_key,
     score_event_frames,
     truncate_mrl,
 )
+
+
+class FakeTensor:
+    def __init__(self, values):
+        self.values = np.asarray(values, dtype=np.float32)
+
+    def detach(self):
+        return self
+
+    def float(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self.values
+
+
+class FakeProcessorBatch(dict):
+    def to(self, device):
+        return self
+
+
+class FakeSiglipProcessor:
+    def __call__(self, **kwargs):
+        return FakeProcessorBatch()
+
+
+class FakeInferenceMode:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+
+class FakeTorch:
+    @staticmethod
+    def inference_mode():
+        return FakeInferenceMode()
+
+
+class FakeSiglipModel:
+    def __init__(self):
+        self.text_return_dict = None
+        self.image_return_dict = None
+
+    def get_text_features(self, **kwargs):
+        self.text_return_dict = kwargs.get("return_dict")
+        return SimpleNamespace(
+            last_hidden_state=FakeTensor(np.zeros((2, 4, 2))),
+            pooler_output=FakeTensor([[3.0, 4.0], [0.0, 2.0]]),
+        )
+
+    def get_image_features(self, **kwargs):
+        self.image_return_dict = kwargs.get("return_dict")
+        return FakeTensor([[5.0, 0.0]])
 
 
 class FakeEmbedder:
@@ -62,6 +123,38 @@ class BatchTrackingEmbedder:
 
 
 class AdaptiveEmbeddingTests(unittest.TestCase):
+    def test_siglip2_accepts_v5_model_output_and_v4_tensor(self):
+        embedder = object.__new__(Siglip2Embedder)
+        embedder.output_dimension = 2
+        embedder._processor = FakeSiglipProcessor()
+        embedder._model = FakeSiglipModel()
+        embedder._torch = FakeTorch()
+        embedder._device = "cpu"
+
+        text = embedder.encode_texts(["first", "second"])
+        images = embedder.encode_images(["frame"])
+
+        self.assertTrue(embedder._model.text_return_dict)
+        self.assertTrue(embedder._model.image_return_dict)
+        np.testing.assert_allclose(text, [[0.6, 0.8], [0.0, 1.0]], atol=1e-7)
+        np.testing.assert_allclose(images, [[1.0, 0.0]], atol=1e-7)
+
+    def test_siglip2_rejects_output_without_pooled_features(self):
+        embedder = object.__new__(Siglip2Embedder)
+        embedder.output_dimension = 2
+        embedder._processor = FakeSiglipProcessor()
+        embedder._model = FakeSiglipModel()
+        embedder._model.get_text_features = lambda **kwargs: SimpleNamespace(
+            pooler_output=None
+        )
+        embedder._torch = FakeTorch()
+        embedder._device = "cpu"
+
+        with self.assertRaisesRegex(
+            EmbeddingConfigurationError, "no pooled feature tensor"
+        ):
+            embedder.encode_texts(["query"])
+
     def test_score_event_frames_keeps_three_raw_curves_separate(self):
         embedder = FakeEmbedder()
 
