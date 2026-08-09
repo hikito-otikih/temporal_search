@@ -1,7 +1,9 @@
-from typing import Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+
+from adaptive_search.api import router as adaptive_router
 
 from rewrite_queries import (
     ConfigurationError,
@@ -13,18 +15,29 @@ from rewrite_queries import (
 from rewrite_schema import RewriteRequest, RewriteResponse
 from temporal_search import temporal_search
 
+NonEmptyQuery = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+]
+
 app = FastAPI(title="Temporal Search API")
 
 
 class TemporalSearchRequest(BaseModel):
-    query: list[str]
-    top_k_tuple: int = 100
-    top_k_each_query: int = 100
-    gamma: float = 0.05
-    searcher_type: str = "TemporalSearcher"
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: list[NonEmptyQuery] = Field(min_length=1, max_length=32)
+    top_k_tuple: int = Field(default=100, ge=1, le=10_000)
+    top_k_each_query: int = Field(default=100, ge=1, le=10_000)
+    gamma: float = Field(default=0.05, ge=0.0, allow_inf_nan=False)
+    searcher_type: Literal["TemporalSearcher", "AmbiguousSearcher"] = (
+        "TemporalSearcher"
+    )
     objectFilterMode: bool = False
     object_name_list: Optional[list[str]] = None
-    objectThreshold: float = 0.5
+    objectThreshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+app.include_router(adaptive_router)
 
 
 @app.post('/rewrite', response_model=RewriteResponse)

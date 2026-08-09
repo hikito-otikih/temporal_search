@@ -1,0 +1,266 @@
+"""Validated adapter for the sparse frame-search service on port 8000.
+
+This module is independent of the legacy client. It preserves ``event_id`` and
+``query_variant`` so retrieval variants can be fused without being mistaken
+for multiple temporal events.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from hashlib import sha256
+import json
+import math
+from pathlib import PurePosixPath
+import socket
+from typing import Any, Protocol
+from urllib import error, request
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from .models import SparseCandidate
+
+
+class UpstreamSearchError(RuntimeError):
+    """Raised when the external sparse-search service cannot be trusted."""
+
+
+class UpstreamHit(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
+
+    video_name: str = Field(min_length=1)
+    frame_index: int = Field(ge=0)
+    timestamp: str | None = None
+    timestamp_seconds: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
+    score: float = Field(allow_inf_nan=False)
+
+
+class UpstreamResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
+
+    query: str = Field(min_length=1)
+    top_k: int | None = Field(default=None, ge=1)
+    results: list[UpstreamHit]
+
+
+@dataclass(frozen=True)
+class QueryVariant:
+    event_id: str
+    variant_id: str
+    text: str
+
+    def __post_init__(self) -> None:
+        if not self.event_id.strip():
+            raise ValueError("event_id must not be empty")
+        if not self.variant_id.strip():
+            raise ValueError("variant_id must not be empty")
+        if not self.text.strip():
+            raise ValueError("query variant text must not be empty")
+
+
+class TimestampResolver(Protocol):
+    def __call__(
+        self, video_id: str, frame_index: int, fallback_seconds: float
+    ) -> float: ...
+
+
+Transport = Callable[[str, dict[str, Any], float], Mapping[str, Any]]
+
+
+class UpstreamSearchClient:
+    """Synchronous client with an injectable transport for offline tests."""
+
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8000",
+        *,
+        timeout_seconds: float = 30.0,
+        transport: Transport | None = None,
+    ) -> None:
+        normalized = base_url.rstrip("/")
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("base_url must use http:// or https://")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be a positive finite number")
+        self.base_url = normalized
+        self.timeout_seconds = timeout_seconds
+        self._transport = transport or _urlopen_json
+
+    def health(self) -> dict[str, Any]:
+        payload = self._transport(
+            f"{self.base_url}/health",
+            {"__http_method__": "GET"},
+            self.timeout_seconds,
+        )
+        return dict(payload)
+
+    def search(self, query_text: str, top_k: int) -> UpstreamResponse:
+        text = query_text.strip()
+        if not text:
+            raise ValueError("query_text must not be empty")
+        if not 1 <= top_k <= 10_000:
+            raise ValueError("top_k must be in [1, 10000]")
+        try:
+            payload = self._transport(
+                f"{self.base_url}/search",
+                {"query": text, "top_k": top_k},
+                self.timeout_seconds,
+            )
+            response = UpstreamResponse.model_validate(payload)
+        except ValidationError as exc:
+            raise UpstreamSearchError(
+                "upstream /search returned an invalid response schema"
+            ) from exc
+        if response.query.strip() != text:
+            raise UpstreamSearchError(
+                "upstream /search echoed a different query"
+            )
+        if response.top_k is not None and response.top_k != top_k:
+            raise UpstreamSearchError(
+                "upstream /search echoed a different top_k"
+            )
+        if len(response.results) > top_k:
+            raise UpstreamSearchError(
+                "upstream /search returned more hits than requested top_k"
+            )
+        return response
+
+    def retrieve_candidates(
+        self,
+        *,
+        session_id: str,
+        variants: Sequence[QueryVariant],
+        top_k: int,
+        timestamp_resolver: TimestampResolver | None = None,
+    ) -> list[SparseCandidate]:
+        if not session_id.strip():
+            raise ValueError("session_id must not be empty")
+        candidates: list[SparseCandidate] = []
+        for variant in variants:
+            response = self.search(variant.text, top_k)
+            for rank, hit in enumerate(response.results, start=1):
+                video_id = normalize_video_id(hit.video_name)
+                fallback = (
+                    hit.timestamp_seconds
+                    if hit.timestamp_seconds is not None
+                    else parse_display_timestamp(hit.timestamp)
+                )
+                timestamp = (
+                    timestamp_resolver(video_id, hit.frame_index, fallback)
+                    if timestamp_resolver is not None
+                    else fallback
+                )
+                if not math.isfinite(timestamp) or timestamp < 0:
+                    raise UpstreamSearchError(
+                        "timestamp resolver returned an invalid timestamp"
+                    )
+                candidates.append(
+                    SparseCandidate(
+                        id=_candidate_id(
+                            session_id,
+                            variant.event_id,
+                            variant.variant_id,
+                            video_id,
+                            hit.frame_index,
+                            rank,
+                        ),
+                        session_id=session_id,
+                        event_id=variant.event_id,
+                        video_id=video_id,
+                        frame_id=hit.frame_index,
+                        timestamp_seconds=timestamp,
+                        raw_relevance_score=hit.score,
+                        query_variant=variant.variant_id,
+                    )
+                )
+        return candidates
+
+
+def variants_from_mapping(
+    event_queries: Mapping[str, Mapping[str, str]],
+) -> list[QueryVariant]:
+    return [
+        QueryVariant(event_id=event_id, variant_id=variant_id, text=text)
+        for event_id in sorted(event_queries)
+        for variant_id, text in sorted(event_queries[event_id].items())
+    ]
+
+
+def parse_display_timestamp(value: str | None) -> float:
+    """Parse ``SS``, ``MM:SS`` or ``HH:MM:SS`` legacy timestamps."""
+
+    if value is None or not value.strip():
+        raise UpstreamSearchError(
+            "upstream hit has neither timestamp_seconds nor timestamp"
+        )
+    parts = value.strip().split(":")
+    if len(parts) > 3:
+        raise UpstreamSearchError(f"invalid upstream timestamp: {value!r}")
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as exc:
+        raise UpstreamSearchError(f"invalid upstream timestamp: {value!r}") from exc
+    if any(not math.isfinite(item) or item < 0 for item in numbers):
+        raise UpstreamSearchError(f"invalid upstream timestamp: {value!r}")
+    if len(numbers) > 1 and numbers[-1] >= 60:
+        raise UpstreamSearchError(f"invalid upstream timestamp: {value!r}")
+    if len(numbers) == 3 and numbers[-2] >= 60:
+        raise UpstreamSearchError(f"invalid upstream timestamp: {value!r}")
+    padded = [0.0] * (3 - len(numbers)) + numbers
+    hours, minutes, seconds = padded
+    return hours * 3600.0 + minutes * 60.0 + seconds
+
+
+def normalize_video_id(video_name: str) -> str:
+    normalized = video_name.strip().replace("\\", "/")
+    filename = PurePosixPath(normalized).name
+    if filename.lower().endswith(".mp4"):
+        filename = filename[:-4]
+    if not filename:
+        raise UpstreamSearchError("upstream video_name has no usable identifier")
+    return filename
+
+
+def _candidate_id(
+    session_id: str,
+    event_id: str,
+    variant_id: str,
+    video_id: str,
+    frame_index: int,
+    rank: int,
+) -> str:
+    payload = "\x1f".join(
+        (session_id, event_id, variant_id, video_id, str(frame_index), str(rank))
+    ).encode("utf-8")
+    return f"candidate_upstream_{sha256(payload).hexdigest()[:20]}"
+
+
+def _urlopen_json(
+    url: str, payload: dict[str, Any], timeout_seconds: float
+) -> Mapping[str, Any]:
+    payload = dict(payload)
+    method = str(payload.pop("__http_method__", "POST"))
+    body = None if method == "GET" else json.dumps(payload).encode("utf-8")
+    req = request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method=method,
+    )
+    try:
+        with request.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        raise UpstreamSearchError(
+            f"upstream request failed with HTTP {exc.code}"
+        ) from exc
+    except (error.URLError, socket.timeout, TimeoutError) as exc:
+        raise UpstreamSearchError("upstream request failed or timed out") from exc
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise UpstreamSearchError("upstream returned invalid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise UpstreamSearchError("upstream JSON response must be an object")
+    return decoded

@@ -1,0 +1,16 @@
+{
+  "query_dir": "/mnt/c/Users/huynh/Downloads/youcook2/query",
+  "query_mode": "event",
+  "output_dir": "benchmark_runs/youcook2/siglip_max",
+  "base_url": "http://127.0.0.1:8000",
+  "frame_top_k": 200,
+  "recall_k": [1, 5, 10, 20, 50],
+  "aggregation": "max",
+  "top_m": 3,
+  "temperature": 1.0,
+  "timeout": 30.0,
+  "retries": 2,
+  "retry_backoff": 0.5,
+  "progress_every": 10
+}
+

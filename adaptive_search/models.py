@@ -1,0 +1,497 @@
+"""Strict domain models for the adaptive temporal-search core.
+
+The module deliberately uses explicit ``*_seconds`` field names.  The legacy
+code mixes frame indices and timestamp strings; keeping seconds canonical at
+the adaptive-core boundary prevents unit ambiguity in API and cache payloads.
+"""
+
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+NonEmptyStr = Annotated[str, Field(min_length=1)]
+RawScore = Annotated[float, Field(allow_inf_nan=False)]
+UnitScore = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+NonNegativeFloat = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+PositiveFloat = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
+Seconds = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+PositiveInt = Annotated[int, Field(gt=0)]
+NonNegativeInt = Annotated[int, Field(ge=0)]
+FrameRunBudget = Annotated[int, Field(gt=0, le=4096)]
+EmbeddingBatchSize = Annotated[int, Field(gt=0, le=512)]
+
+
+BoundaryType = Literal[
+    "onset",
+    "offset",
+    "transition",
+    "plateau_start",
+    "symmetric_peak",
+    "state",
+    "unknown",
+]
+RefinementStatus = Literal[
+    "pending",
+    "medium",
+    "dense",
+    "completed",
+    "failed",
+]
+RegionUserStatus = Literal["active", "fixed", "rejected"]
+ProposalSource = Literal["sparse", "medium", "dense", "user"]
+ProposalUserStatus = Literal["active", "fixed", "confirmed", "rejected"]
+
+
+class StrictModel(BaseModel):
+    """Base class shared by externally serialized adaptive-search models."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        validate_assignment=True,
+        str_strip_whitespace=True,
+    )
+
+
+class ModelRuntimeSpec(StrictModel):
+    """Every value that can change model output or an embedding cache key."""
+
+    model_id: NonEmptyStr
+    revision: NonEmptyStr = "main"
+    dimension: PositiveInt | None = None
+    preprocess: NonEmptyStr
+    instruction: str = ""
+
+
+def _runtime_embedding_model() -> ModelRuntimeSpec:
+    return ModelRuntimeSpec(
+        model_id="google/siglip2-base-patch16-224",
+        revision="main",
+        dimension=768,
+        preprocess="siglip2-auto-processor-v1",
+        instruction="",
+    )
+
+
+def _quality_embedding_model() -> ModelRuntimeSpec:
+    return ModelRuntimeSpec(
+        model_id="Qwen/Qwen3-VL-Embedding-2B",
+        revision="main",
+        dimension=1024,
+        preprocess="qwen3-vl-embedding:v1",
+        instruction=(
+            "Retrieve video frames that visually depict the described event."
+        ),
+    )
+
+
+def _quality_reranker_model() -> ModelRuntimeSpec:
+    return ModelRuntimeSpec(
+        model_id="Qwen/Qwen3-VL-Reranker-2B",
+        revision="main",
+        dimension=1,
+        preprocess="qwen3-vl-reranker:v1",
+        instruction=(
+            "Judge whether the ordered video frames depict the described "
+            "events in the required chronological order."
+        ),
+    )
+
+
+class RetrievalHyperparameters(StrictModel):
+    top_n_per_variant: PositiveInt = 50
+    top_n_fused: PositiveInt = 100
+    rrf_k: PositiveInt = 60
+    query_variants_per_event: PositiveInt = 4
+
+
+class ClusteringHyperparameters(StrictModel):
+    gap_seconds: Seconds = 3.0
+    margin_seconds: Seconds = 3.0
+    max_region_seconds: PositiveFloat = 30.0
+
+    @model_validator(mode="after")
+    def validate_region_limit(self) -> "ClusteringHyperparameters":
+        if self.max_region_seconds < 2.0 * self.margin_seconds:
+            raise ValueError(
+                "max_region_seconds must be >= 2 * margin_seconds"
+            )
+        return self
+
+
+class RefinementHyperparameters(StrictModel):
+    """Budget, sampling, and fully fingerprintable inference configuration."""
+
+    embedding_model: ModelRuntimeSpec = Field(
+        default_factory=_runtime_embedding_model
+    )
+    quality_embedding_model: ModelRuntimeSpec | None = Field(
+        default_factory=_quality_embedding_model
+    )
+    reranker_model: ModelRuntimeSpec | None = Field(
+        default_factory=_quality_reranker_model
+    )
+    quality_profile_enabled: bool = False
+    use_reranker: bool = False
+
+    max_initial_videos: PositiveInt = 5
+    max_regions_per_event_per_video: PositiveInt = 3
+    max_total_regions: PositiveInt = 60
+    exploration_region_ratio: UnitScore = 0.15
+    max_frames_per_run: FrameRunBudget = 2000
+    embedding_batch_size: EmbeddingBatchSize = 64
+    medium_interval_seconds: PositiveFloat = 0.5
+    dense_interval_seconds: PositiveFloat = 0.1
+    dense_radius_seconds: PositiveFloat = 1.0
+
+    video_coverage_weight: NonNegativeFloat = 0.5
+    video_mean_weight: NonNegativeFloat = 0.3
+    video_min_weight: NonNegativeFloat = 0.2
+
+    @model_validator(mode="after")
+    def validate_refinement_configuration(self) -> "RefinementHyperparameters":
+        if self.dense_interval_seconds > self.medium_interval_seconds:
+            raise ValueError(
+                "dense_interval_seconds must be <= medium_interval_seconds"
+            )
+        if self.quality_profile_enabled and self.quality_embedding_model is None:
+            raise ValueError(
+                "quality_embedding_model is required when quality_profile_enabled"
+            )
+        if self.use_reranker:
+            raise ValueError(
+                "use_reranker=true is not supported until the ordered-frame "
+                "reranker runtime is implemented"
+            )
+        video_weight = (
+            self.video_coverage_weight
+            + self.video_mean_weight
+            + self.video_min_weight
+        )
+        if video_weight <= 0.0:
+            raise ValueError("at least one video-priority weight must be positive")
+        return self
+
+
+class BoundaryHyperparameters(StrictModel):
+    window_options_seconds: tuple[PositiveFloat, ...] = (0.5, 1.0, 2.0, 3.0)
+    min_samples_per_side: PositiveInt = 2
+    pairwise_temperature: PositiveFloat = 1.0
+    anchor_clip_z: PositiveFloat = 8.0
+
+    post_contrast_weight: NonNegativeFloat = 0.5
+    pre_contrast_weight: NonNegativeFloat = 0.5
+    motion_contrast_weight: NonNegativeFloat = 0.1
+    window_length_regularization: NonNegativeFloat = 0.01
+    window_asymmetry_regularization: NonNegativeFloat = 0.01
+
+    semantic_weight: NonNegativeFloat = 0.4
+    boundary_weight: NonNegativeFloat = 0.3
+    pre_weight: NonNegativeFloat = 0.1
+    post_weight: NonNegativeFloat = 0.2
+
+    nms_radius_seconds: Seconds = 0.5
+    max_proposals_per_region: PositiveInt = 5
+
+    @field_validator("window_options_seconds", mode="before")
+    @classmethod
+    def accept_json_window_array(cls, value):
+        if isinstance(value, list):
+            return tuple(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_boundary_configuration(self) -> "BoundaryHyperparameters":
+        windows = self.window_options_seconds
+        if not windows:
+            raise ValueError("window_options_seconds must not be empty")
+        if len(set(windows)) != len(windows):
+            raise ValueError("window_options_seconds must contain unique values")
+        if tuple(sorted(windows)) != windows:
+            raise ValueError("window_options_seconds must be strictly increasing")
+        contrast_weight = (
+            self.post_contrast_weight
+            + self.pre_contrast_weight
+            + self.motion_contrast_weight
+        )
+        if contrast_weight <= 0.0:
+            raise ValueError("at least one boundary contrast weight must be positive")
+        proposal_weight = (
+            self.semantic_weight
+            + self.boundary_weight
+            + self.pre_weight
+            + self.post_weight
+        )
+        if proposal_weight <= 0.0:
+            raise ValueError("at least one proposal-score weight must be positive")
+        return self
+
+
+class RankingHyperparameters(StrictModel):
+    top_k: PositiveInt = 20
+    gap_policy: Literal["hinge"] = "hinge"
+    default_gap_tau_seconds: Seconds = 10.0
+    gap_lambda: NonNegativeFloat = 0.01
+    fixed_constraint_bonus: NonNegativeFloat = 0.02
+    require_strict_order: bool = True
+
+    max_proposals_per_event_per_video: PositiveInt = 8
+    max_combinations_per_video: PositiveInt = 10_000
+    max_tuples_per_video: PositiveInt = 200
+    max_total_tuples: PositiveInt = 2_000
+
+    @model_validator(mode="after")
+    def validate_tuple_caps(self) -> "RankingHyperparameters":
+        if self.top_k > self.max_total_tuples:
+            raise ValueError("top_k must be <= max_total_tuples")
+        return self
+
+
+class SearchHyperparameters(StrictModel):
+    retrieval: RetrievalHyperparameters = Field(
+        default_factory=RetrievalHyperparameters
+    )
+    clustering: ClusteringHyperparameters = Field(
+        default_factory=ClusteringHyperparameters
+    )
+    refinement: RefinementHyperparameters = Field(
+        default_factory=RefinementHyperparameters
+    )
+    boundary: BoundaryHyperparameters = Field(
+        default_factory=BoundaryHyperparameters
+    )
+    ranking: RankingHyperparameters = Field(default_factory=RankingHyperparameters)
+
+
+class EventDefinition(StrictModel):
+    event_id: NonEmptyStr
+    original_query: NonEmptyStr
+    anchor_query: NonEmptyStr
+    pre_state: NonEmptyStr | None = None
+    post_state: NonEmptyStr | None = None
+    boundary_type: BoundaryType = "unknown"
+
+    @model_validator(mode="after")
+    def validate_transition_states(self) -> "EventDefinition":
+        transition_profiles = {"onset", "offset", "transition", "plateau_start"}
+        if self.boundary_type in transition_profiles and (
+            self.pre_state is None or self.post_state is None
+        ):
+            raise ValueError(
+                "transition boundary profiles require both pre_state and post_state"
+            )
+        return self
+
+
+class SparseCandidate(StrictModel):
+    id: NonEmptyStr
+    session_id: NonEmptyStr
+    event_id: NonEmptyStr
+    video_id: NonEmptyStr
+    frame_id: NonNegativeInt
+    timestamp_seconds: Seconds
+    raw_relevance_score: RawScore
+    normalized_relevance_score: UnitScore | None = None
+    query_variant: NonEmptyStr
+
+
+class TemporalRegion(StrictModel):
+    id: NonEmptyStr
+    session_id: NonEmptyStr
+    event_id: NonEmptyStr
+    video_id: NonEmptyStr
+    start_seconds: Seconds
+    end_seconds: Seconds
+    candidate_ids: tuple[NonEmptyStr, ...]
+    raw_coarse_score: RawScore
+    normalized_coarse_score: UnitScore | None = None
+    refinement_status: RefinementStatus = "pending"
+    user_status: RegionUserStatus = "active"
+
+    @model_validator(mode="after")
+    def validate_region(self) -> "TemporalRegion":
+        if self.end_seconds < self.start_seconds:
+            raise ValueError("end_seconds must be >= start_seconds")
+        if not self.candidate_ids:
+            raise ValueError("candidate_ids must not be empty")
+        if len(set(self.candidate_ids)) != len(self.candidate_ids):
+            raise ValueError("candidate_ids must be unique")
+        return self
+
+
+class FrameScoreSample(StrictModel):
+    session_id: NonEmptyStr
+    event_id: NonEmptyStr
+    video_id: NonEmptyStr
+    region_id: NonEmptyStr
+    frame_id: NonNegativeInt
+    timestamp_seconds: Seconds
+
+    raw_anchor_score: RawScore
+    raw_pre_score: RawScore
+    raw_post_score: RawScore
+    raw_motion_score: RawScore = 0.0
+
+    normalized_anchor_score: UnitScore | None = None
+    normalized_pre_score: UnitScore | None = None
+    normalized_post_score: UnitScore | None = None
+    normalized_motion_score: UnitScore | None = None
+
+
+class EventProposal(StrictModel):
+    id: NonEmptyStr
+    session_id: NonEmptyStr
+    event_id: NonEmptyStr
+    video_id: NonEmptyStr
+    region_id: NonEmptyStr
+    timestamp_seconds: Seconds
+    frame_id: NonNegativeInt
+
+    raw_semantic_score: RawScore
+    normalized_semantic_score: UnitScore
+    raw_boundary_score: RawScore
+    normalized_boundary_score: UnitScore
+    raw_motion_score: RawScore = 0.0
+    normalized_motion_score: UnitScore = 0.5
+    pre_consistency_score: UnitScore
+    post_persistence_score: UnitScore
+    final_event_score: UnitScore
+
+    left_window_seconds: PositiveFloat | None = None
+    right_window_seconds: PositiveFloat | None = None
+    source: ProposalSource = "dense"
+    user_status: ProposalUserStatus = "active"
+
+
+class EventConstraint(StrictModel):
+    fixed_video_id: NonEmptyStr | None = None
+    fixed_region_id: NonEmptyStr | None = None
+    fixed_frame_id: NonNegativeInt | None = None
+    fixed_timestamp_seconds: Seconds | None = None
+    rejected_region_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
+    rejected_proposal_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
+
+    @field_validator("rejected_region_ids", "rejected_proposal_ids", mode="before")
+    @classmethod
+    def accept_json_rejection_arrays(cls, value):
+        if isinstance(value, list):
+            return frozenset(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_fixed_region(self) -> "EventConstraint":
+        # A fixed frame deliberately outranks a stale fixed-region selection.
+        if (
+            self.fixed_frame_id is None
+            and self.fixed_region_id is not None
+            and self.fixed_region_id in self.rejected_region_ids
+        ):
+            raise ValueError("fixed_region_id cannot also be rejected")
+        return self
+
+
+class AdjacentGapConstraint(StrictModel):
+    before_event_id: NonEmptyStr
+    after_event_id: NonEmptyStr
+    min_gap_seconds: Seconds = 0.0
+    max_gap_seconds: Seconds | None = None
+    hinge_tau_seconds: Seconds | None = None
+    gap_lambda: NonNegativeFloat | None = None
+
+    @model_validator(mode="after")
+    def validate_gap(self) -> "AdjacentGapConstraint":
+        if self.before_event_id == self.after_event_id:
+            raise ValueError("adjacent gap must reference two different events")
+        if (
+            self.max_gap_seconds is not None
+            and self.max_gap_seconds < self.min_gap_seconds
+        ):
+            raise ValueError("max_gap_seconds must be >= min_gap_seconds")
+        return self
+
+
+class SearchConstraints(StrictModel):
+    allowed_video_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
+    rejected_video_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
+    event_constraints: dict[NonEmptyStr, EventConstraint] = Field(
+        default_factory=dict
+    )
+    adjacent_gap_constraints: tuple[AdjacentGapConstraint, ...] = ()
+    max_tuple_span_seconds: Seconds | None = None
+
+    @field_validator("allowed_video_ids", "rejected_video_ids", mode="before")
+    @classmethod
+    def accept_json_video_arrays(cls, value):
+        if isinstance(value, list):
+            return frozenset(value)
+        return value
+
+    @field_validator("adjacent_gap_constraints", mode="before")
+    @classmethod
+    def accept_json_gap_array(cls, value):
+        if isinstance(value, list):
+            return tuple(value)
+        return value
+
+    @model_validator(mode="after")
+    def validate_constraints(self) -> "SearchConstraints":
+        overlap = self.allowed_video_ids & self.rejected_video_ids
+        if overlap:
+            raise ValueError("a video cannot be both allowed and rejected")
+
+        gap_pairs: set[tuple[str, str]] = set()
+        for gap in self.adjacent_gap_constraints:
+            pair = (gap.before_event_id, gap.after_event_id)
+            if pair in gap_pairs:
+                raise ValueError("adjacent gap constraints must have unique pairs")
+            gap_pairs.add(pair)
+
+        for event_constraint in self.event_constraints.values():
+            if event_constraint.fixed_video_id in self.rejected_video_ids:
+                raise ValueError("a fixed video cannot also be rejected")
+        return self
+
+
+class VideoPriority(StrictModel):
+    video_id: NonEmptyStr
+    event_coverage: NonNegativeInt
+    normalized_coverage: UnitScore
+    mean_best_event_score: UnitScore
+    min_best_event_score: UnitScore
+    priority_score: UnitScore
+
+
+class TupleResult(StrictModel):
+    id: NonEmptyStr
+    video_id: NonEmptyStr
+    proposals: tuple[EventProposal, ...]
+    adjacent_gaps_seconds: tuple[Seconds, ...]
+    adjacent_gap_penalties: tuple[NonNegativeFloat, ...]
+
+    raw_event_mean_score: UnitScore
+    raw_gap_penalty: NonNegativeFloat
+    raw_constraint_bonus: NonNegativeFloat
+    raw_final_score: RawScore
+    normalized_final_score: UnitScore | None = None
+
+    @model_validator(mode="after")
+    def validate_tuple(self) -> "TupleResult":
+        if not self.proposals:
+            raise ValueError("proposals must not be empty")
+        if any(item.video_id != self.video_id for item in self.proposals):
+            raise ValueError("all proposals in a tuple must be from the same video")
+        event_ids = [item.event_id for item in self.proposals]
+        if len(set(event_ids)) != len(event_ids):
+            raise ValueError("a tuple cannot contain an event more than once")
+        timestamps = [item.timestamp_seconds for item in self.proposals]
+        if timestamps != sorted(timestamps):
+            raise ValueError("proposal timestamps must be ordered")
+        expected_gap_count = len(self.proposals) - 1
+        if len(self.adjacent_gaps_seconds) != expected_gap_count:
+            raise ValueError("adjacent_gaps_seconds has the wrong length")
+        if len(self.adjacent_gap_penalties) != expected_gap_count:
+            raise ValueError("adjacent_gap_penalties has the wrong length")
+        return self

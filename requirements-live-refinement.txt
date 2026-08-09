@@ -1,0 +1,8 @@
+# Optional local-video/GPU runtime. Install the CUDA-compatible PyTorch build
+# for the target machine before installing this file when needed.
+-r requirements.txt
+
+av
+Pillow
+torch
+transformers

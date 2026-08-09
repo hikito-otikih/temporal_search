@@ -1,6 +1,9 @@
 # Temporal Search API
 
-Temporal Search ranks sequences of video keyframes that match a list of text queries. It fetches candidate frames from an upstream frame-search service, groups them by video, and scores tuples using both frame relevance and temporal distance.
+Temporal Search ranks sequences of video keyframes that match a list of text
+queries. The repository keeps the original frame-index search API and adds a
+versioned adaptive session API with query fusion, boundary proposals, user
+constraints, and ordered tuple ranking.
 
 The repository exposes the search through a FastAPI server on port `8001`.
 
@@ -19,6 +22,54 @@ Available strategies:
 
 - `TemporalSearcher` (default) matches queries in their supplied order.
 - `AmbiguousSearcher` matches every query once without requiring query order.
+
+## Adaptive temporal search
+
+Call `GET /v1/searchers` to discover the legacy and adaptive contracts. The
+adaptive workflow uses `POST /v1/search-sessions`, ingests sparse candidates,
+then either calls `POST .../commands/refine` or ingests precomputed frame-level
+anchor/pre/post scores. It supports deterministic RRF fusion, temporal regions,
+budgeted refinement, boundary profiles, temporal NMS, hard constraints,
+optimistic revisions, and bounded same-video tuple assembly.
+
+The local `YouCook2FrameProvider` uses PyAV and actual presentation timestamps;
+catalog discovery over 1,660 videos and a real frame decode have been verified.
+The medium/dense orchestrator, strict API command, persisted run metrics, and
+region completion state are covered by end-to-end tests with an injected fake
+embedder. `GET /v1/searchers` reports live refinement available only when both
+the provider and model are usable, while retaining `frame_provider` as a nested
+sub-capability.
+
+Live image encoding is microbatched (default 64) under a hard 4,096-frame
+server-side run ceiling. First-load/model-runtime/OOM failures return a
+capability `503` without committing partial frame-score artifacts.
+
+The balanced model profile is SigLIP2 Base. Its runtime is lazy: API startup
+does not load/download weights, and live inference requires an immutable
+`ADAPTIVE_SIGLIP2_REVISION`. Actual SigLIP2 GPU inference has not yet been
+verified in this workspace. The optional Qwen3-VL embedding/reranker profile is
+specified but still has no executed runtime.
+
+Optional local refinement setup is documented in `.env.example` and
+`requirements-live-refinement.txt`. At minimum configure `YOUCOOK2_DATA_ROOT`
+and a pinned SigLIP2 revision before starting the API.
+
+`GET /v1/searchers` exposes the complete active `runtime_model_spec`. When a
+balanced session omits `refinement.embedding_model`, the API persists that
+exact configured spec automatically; an explicit client spec is never silently
+rewritten. The ordered-frame reranker and motion scorer are not implemented,
+so `use_reranker=true` is rejected and live runs report
+`motion_scores_available=false`.
+
+The self-contained [YouCook2 benchmark](benchmarks/youcook2/README.md) queries
+`http://127.0.0.1:8000/search` and measures corpus Video Recall@K without sending
+ground truth to the backend. Current saved runs are smoke/pilot runs only; they
+are not full validation or temporal-boundary results.
+
+See [the implementation plan](docs/IMPLEMENTATION_PLAN.md) and the
+[complete adaptive module specification](docs/ADAPTIVE_TEMPORAL_SEARCH.md) for
+pipeline formulas, defaults, API integration, invalidation rules, limitations,
+and paper evaluation guidance.
 
 ## Requirements
 
@@ -314,10 +365,58 @@ results = temporal_search(
 )
 ```
 
+## Streamlit UI
+
+A research/debug console lives in `streamlit_ui/`. It talks only to the FastAPI
+backend through a typed client (`streamlit_ui/services/api_client.py`) and
+never reimplements clustering/scoring.
+
+```bash
+# Install UI dependencies (streamlit, plotly) into the same venv
+.venv/bin/python -m pip install -r streamlit_ui/requirements.txt
+
+# Optional configuration
+cp streamlit_ui/.env.example streamlit_ui/.env
+
+# Run the console (backend on :8001 must be running)
+.venv/bin/python -m streamlit run streamlit_ui/Home.py
+```
+
+Pages:
+
+| Page | Purpose |
+|---|---|
+| `Home.py` | Landing + capability discovery. |
+| `pages/01_Legacy_Search.py` | One-shot `/temporal-search`, no session. |
+| `pages/02_Adaptive_Session.py` | Session stepper: events → candidates → regions → frame scores → proposals → tuples → feedback. |
+| `pages/03_Region_Inspector.py` | Timeline, keyframe filmstrip, score curves. |
+| `pages/04_Tuple_Explorer.py` | Ordered tuples, gaps, score decomposition, export. |
+| `pages/05_YouCook2_Evaluation.py` | Corpus Video Recall@K with leakage guard and video dedup. |
+| `pages/06_Run_Comparison.py` | Compare runs/hyperparameter presets. |
+
+Design notes:
+
+- The backend is the source of truth. Adaptive mutations always send
+  `expected_revision`; on a revision conflict the UI reloads the session and
+  asks you to re-apply instead of auto-retrying.
+- Raw and normalized scores are shown separately and never labeled as
+  probability/confidence.
+- Ground truth (`video_path`) is parsed only inside the YouCook2 evaluator;
+  retrieval payloads contain only event text and top-K.
+- Live dense refinement is capability-gated (`GET /v1/searchers`); when
+  `live_refinement_available=false` you can still ingest precomputed frame
+  scores.
+- Run the UI tests with:
+
+```bash
+.venv/bin/python -m unittest discover -s streamlit_ui/tests -p "test_*.py"
+```
+
 ## Project layout
 
 ```text
 app.py                       FastAPI application and request model
+adaptive_search/             Adaptive domain, algorithms, session service/API
 temporal_search.py           Search orchestration and result formatting
 sendRequests.py              Upstream frame-search client
 video_clustering.py          Groups candidate frames by video
@@ -327,4 +426,5 @@ searcher/
 ├── TemporalSearcher.py      Ordered temporal tuple search
 └── AmbiguousSearcher.py     Order-independent tuple search
 data/                        Sample results and optional object metadata
+docs/                        Revised plan and adaptive technical specification
 ```

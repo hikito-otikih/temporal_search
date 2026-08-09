@@ -55,6 +55,8 @@ Thumbs.db
 # Local secrets and environment overrides
 *.env.local
 *.env.*
+!.env.example
+!**/.env.example
 secrets.json
 
 # Misc
@@ -64,3 +66,6 @@ secrets.json
 data/output.json
 data/*.tmp
 
+# Local benchmark artifacts and resumable checkpoints
+benchmark_runs/
+benchmarks/**/runs/

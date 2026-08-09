@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from urllib import request
 
 from pydantic import TypeAdapter
@@ -8,8 +9,19 @@ from pydantic import TypeAdapter
 from response_schema import QueryResponse
 
 
+def upstream_search_url() -> str:
+    """Base URL of the frame-search API, overridable via env var.
+
+    The default loopback works when both processes share a network namespace
+    (e.g. all in WSL or all on Windows).  When the backend runs in WSL and the
+    frame-search API runs on the Windows host, set UPSTREAM_SEARCH_URL to the
+    WSL-visible gateway IP of the host.
+    """
+    return os.getenv("UPSTREAM_SEARCH_URL", "http://172.26.176.1:8000").rstrip("/")
+
+
 def search_queries(queries: str | list[str], top_k: int) -> QueryResponse | list[QueryResponse]:
-    """Call http://127.0.0.1:8000/search for one query or many queries.
+    """Call <UPSTREAM_SEARCH_URL>/search for one query or many queries.
 
     For a single string, returns one validated QueryResponse.
     For a list of strings, returns a list of validated QueryResponse objects in the same order.
@@ -24,7 +36,7 @@ def search_queries(queries: str | list[str], top_k: int) -> QueryResponse | list
 def _search_one(query: str, top_k: int) -> QueryResponse:
     payload = json.dumps({"query": query, "top_k": top_k}).encode("utf-8")
     req = request.Request(
-        "http://127.0.0.1:8000/search",
+        f"{upstream_search_url()}/search",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
