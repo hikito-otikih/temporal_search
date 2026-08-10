@@ -125,7 +125,8 @@ The upstream `POST /search` endpoint must return this shape:
 Start the upstream search service on port `8000`, then run:
 
 ```bash
-python app.py
+pip install -e .
+python src/main.py
 ```
 
 The Temporal Search API will be available at `http://127.0.0.1:8001`. Interactive API documentation is available at `http://127.0.0.1:8001/docs`.
@@ -354,7 +355,7 @@ A tuple is retained when at least one of its frames contains all requested objec
 The core function can also be called directly:
 
 ```python
-from temporal_search import temporal_search
+from legacy_search.service import temporal_search
 
 results = temporal_search(
     query=["a person enters", "the person sits"],
@@ -367,19 +368,19 @@ results = temporal_search(
 
 ## Streamlit UI
 
-A research/debug console lives in `streamlit_ui/`. It talks only to the FastAPI
-backend through a typed client (`streamlit_ui/services/api_client.py`) and
+A research/debug console lives in `irrelevant_things/streamlit_ui/`. It talks only to the FastAPI
+backend through a typed client (`irrelevant_things/streamlit_ui/services/api_client.py`) and
 never reimplements clustering/scoring.
 
 ```bash
 # Install UI dependencies (streamlit, plotly) into the same venv
-.venv/bin/python -m pip install -r streamlit_ui/requirements.txt
+.venv/bin/python -m pip install -r irrelevant_things/streamlit_ui/requirements.txt
 
 # Optional configuration
-cp streamlit_ui/.env.example streamlit_ui/.env
+cp irrelevant_things/streamlit_ui/.env.example irrelevant_things/streamlit_ui/.env
 
 # Run the console (backend on :8001 must be running)
-.venv/bin/python -m streamlit run streamlit_ui/Home.py
+.venv/bin/python -m streamlit run irrelevant_things/streamlit_ui/Home.py
 ```
 
 Pages:
@@ -409,22 +410,19 @@ Design notes:
 - Run the UI tests with:
 
 ```bash
-.venv/bin/python -m unittest discover -s streamlit_ui/tests -p "test_*.py"
+.venv/bin/python -m unittest discover -s irrelevant_things/streamlit_ui/tests -p "test_*.py"
 ```
 
 ## Project layout
 
 ```text
-app.py                       FastAPI application and request model
-adaptive_search/             Adaptive domain, algorithms, session service/API
-temporal_search.py           Search orchestration and result formatting
-sendRequests.py              Upstream frame-search client
-video_clustering.py          Groups candidate frames by video
-video_clustering_schema.py   Internal Pydantic models
-response_schema.py           Upstream response models
-searcher/
-├── TemporalSearcher.py      Ordered temporal tuple search
-└── AmbiguousSearcher.py     Order-independent tuple search
+src/
+├── main.py                  FastAPI application assembly (mounts all 3 routers)
+├── config.py                Process-wide .env bootstrap
+├── adaptive_search/         Adaptive domain: router, schemas, service, algorithms
+├── rewrite/                 LLM query-rewrite: router, schemas, service, prompt constants
+└── legacy_search/           Pre-adaptive pipeline: router, schemas, service, searchers/
 data/                        Sample results and optional object metadata
 docs/                        Revised plan and adaptive technical specification
+irrelevant_things/           Streamlit debug console and benchmark tooling (dev-only)
 ```
