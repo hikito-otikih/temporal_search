@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from adaptive_search.embedding import l2_normalize
-from adaptive_search.models import (
+from adaptive_search.schemas import (
     EventDefinition,
     ModelRuntimeSpec,
     SearchHyperparameters,

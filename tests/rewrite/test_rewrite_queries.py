@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import httpx
 
-from rewrite_queries import (
+from rewrite import (
     ConfigurationError,
     DEFAULT_OLLAMA_MODEL,
     OllamaRateLimitError,
@@ -466,7 +466,7 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
             return httpx.Response(200)
 
         with patch.dict(os.environ, {}, clear=True), patch(
-            'rewrite_queries.load_dotenv', return_value=False
+            'rewrite.config.load_dotenv', return_value=False
         ):
             with self.assertRaisesRegex(
                 ConfigurationError, 'OLLAMA_API_KEY is not configured'

@@ -2,13 +2,13 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from adaptive_search.api import (
+from adaptive_search.dependencies import (
     adaptive_service,
     live_refinement_orchestrator,
 )
 from adaptive_search.providers import UnavailableFrameProvider
-from app import app
-from tests.test_adaptive_live_refinement import (
+from main import app
+from tests.adaptive_search.test_adaptive_live_refinement import (
     FakeEmbedder,
     FakeFrameProvider,
     MODEL_SPEC,

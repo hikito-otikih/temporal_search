@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_search.models import (
+from adaptive_search.schemas import (
     BoundaryHyperparameters,
     EventDefinition,
     FrameScoreSample,

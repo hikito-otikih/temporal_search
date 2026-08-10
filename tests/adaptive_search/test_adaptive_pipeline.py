@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from adaptive_search.api import adaptive_service
+from adaptive_search.dependencies import adaptive_service
 from adaptive_search.rewrite_bridge import build_session_plan
-from adaptive_search.upstream import UpstreamSearchClient, UpstreamSearchError
-from app import app
-from rewrite_queries import (
+from adaptive_search.client import UpstreamSearchClient, UpstreamSearchError
+from main import app
+from rewrite import (
     ConfigurationError,
     OllamaRateLimitError,
     OllamaServiceError,
@@ -48,7 +48,7 @@ def rewritten_event(index, query, boundary="start"):
 
 
 def analysis(queries):
-    from rewrite_schema import RewriteResponse
+    from rewrite.schemas import RewriteResponse
 
     return RewriteResponse.model_validate(
         {
@@ -102,7 +102,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         )
         rewrite_mock = AsyncMock(return_value=plan)
         with patch(
-            "adaptive_search.api.rewrite_queries_and_build_plan", rewrite_mock
+            "adaptive_search.router.rewrite_queries_and_build_plan", rewrite_mock
         ):
             response = self.client.post(
                 "/v1/search-sessions/from-queries",
@@ -158,7 +158,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         for error, expected_status, expected_code in cases:
             with self.subTest(error=type(error).__name__):
                 with patch(
-                    "adaptive_search.api.rewrite_queries_and_build_plan",
+                    "adaptive_search.router.rewrite_queries_and_build_plan",
                     AsyncMock(side_effect=error),
                 ):
                     response = self.client.post(
@@ -175,7 +175,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         )
 
         with patch(
-            "adaptive_search.api.upstream_search_client", fake_upstream_client()
+            "adaptive_search.router.upstream_search_client", fake_upstream_client()
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
@@ -212,7 +212,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         session_id = response.json()["session"]["id"]
 
         with patch(
-            "adaptive_search.api.upstream_search_client", fake_upstream_client()
+            "adaptive_search.router.upstream_search_client", fake_upstream_client()
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
@@ -230,7 +230,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         )
 
         with patch(
-            "adaptive_search.api.upstream_search_client", fake_upstream_client()
+            "adaptive_search.router.upstream_search_client", fake_upstream_client()
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
@@ -245,7 +245,7 @@ class AdaptivePipelineTests(unittest.TestCase):
     def test_retrieve_rejects_unknown_event(self):
         session_id = self.create_session_from_queries(["Sự kiện một."])
         with patch(
-            "adaptive_search.api.upstream_search_client", fake_upstream_client()
+            "adaptive_search.router.upstream_search_client", fake_upstream_client()
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
@@ -261,7 +261,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         session_id = self.create_session_from_queries(["Sự kiện một."])
 
         with patch(
-            "adaptive_search.api.upstream_search_client", client
+            "adaptive_search.router.upstream_search_client", client
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",

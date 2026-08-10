@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_search.upstream import (
+from adaptive_search.client import (
     QueryVariant,
     UpstreamSearchClient,
     UpstreamSearchError,

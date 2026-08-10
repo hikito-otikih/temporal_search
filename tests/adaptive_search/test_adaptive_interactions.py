@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_search.models import EventDefinition
+from adaptive_search.schemas import EventDefinition
 from adaptive_search.service import AdaptiveSearchService
 
 

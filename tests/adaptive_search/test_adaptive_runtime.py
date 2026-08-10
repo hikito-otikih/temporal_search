@@ -3,8 +3,8 @@ import unittest
 from unittest.mock import patch
 
 from adaptive_search.refinement import LiveRefinementOrchestrator
-from adaptive_search.models import RefinementHyperparameters
-from adaptive_search.runtime import (
+from adaptive_search.schemas import RefinementHyperparameters
+from adaptive_search.config import (
     LazySiglip2Embedder,
     configure_from_environment,
     runtime_from_environment,
@@ -32,7 +32,7 @@ class AdaptiveRuntimeTests(unittest.TestCase):
         values = {"ADAPTIVE_SIGLIP2_REVISION": "a" * 40}
         with (
             patch.dict(os.environ, values, clear=True),
-            patch("adaptive_search.runtime.importlib.util.find_spec", return_value=None),
+            patch("adaptive_search.config.importlib.util.find_spec", return_value=None),
         ):
             runtime = runtime_from_environment()
         self.assertFalse(runtime.model_configured)

@@ -2,8 +2,8 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from adaptive_search.api import adaptive_service
-from app import app
+from adaptive_search.dependencies import adaptive_service
+from main import app
 
 
 class AdaptiveJsonContractTests(unittest.TestCase):

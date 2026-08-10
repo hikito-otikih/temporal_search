@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_search.models import RetrievalHyperparameters, SparseCandidate
+from adaptive_search.schemas import RetrievalHyperparameters, SparseCandidate
 from adaptive_search.retrieval import fuse_candidates_rrf
 
 

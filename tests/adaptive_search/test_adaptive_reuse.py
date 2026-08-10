@@ -1,6 +1,6 @@
 import unittest
 
-from adaptive_search.models import EventDefinition, FrameScoreSample, SparseCandidate
+from adaptive_search.schemas import EventDefinition, FrameScoreSample, SparseCandidate
 from adaptive_search.service import AdaptiveSearchService
 
 

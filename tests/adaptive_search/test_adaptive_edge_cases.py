@@ -3,15 +3,15 @@ import unittest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from adaptive_search.api import adaptive_service
-from adaptive_search.models import (
+from adaptive_search.dependencies import adaptive_service
+from adaptive_search.schemas import (
     ClusteringHyperparameters,
     RetrievalHyperparameters,
     SparseCandidate,
 )
 from adaptive_search.algorithms import cluster_temporal_regions
 from adaptive_search.retrieval import fuse_candidates_rrf
-from app import app
+from main import app
 
 
 def sparse(candidate_id, event_id, variant, frame_id, score):

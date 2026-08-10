@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 from fastapi.testclient import TestClient
 
-from adaptive_search.api import (
+from adaptive_search.dependencies import (
     adaptive_service,
     live_refinement_orchestrator,
 )
@@ -13,7 +13,7 @@ from adaptive_search.providers import (
     FrameReference,
     UnavailableFrameProvider,
 )
-from app import app
+from main import app
 
 
 MODEL_SPEC = {

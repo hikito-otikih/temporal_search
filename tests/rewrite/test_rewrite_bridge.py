@@ -7,7 +7,7 @@ from adaptive_search.rewrite_bridge import (
     rewrite_queries_and_build_plan,
     variant_texts_for_events,
 )
-from rewrite_schema import RewriteResponse
+from rewrite.schemas import RewriteResponse
 
 
 def rewritten_event(index, query, boundary="start"):

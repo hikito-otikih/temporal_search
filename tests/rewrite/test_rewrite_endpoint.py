@@ -3,14 +3,14 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
-from app import app
-from rewrite_queries import (
+from main import app
+from rewrite import (
     ConfigurationError,
     OllamaRateLimitError,
     OllamaServiceError,
     OllamaTimeoutError,
 )
-from rewrite_schema import RewriteResponse
+from rewrite.schemas import RewriteResponse
 
 
 def analysis_result(queries: list[str]) -> RewriteResponse:
@@ -87,7 +87,7 @@ class RewriteEndpointTests(unittest.TestCase):
         result = analysis_result(payload['query'])
         rewrite_mock = AsyncMock(return_value=result)
 
-        with patch('app.rewrite_queries', rewrite_mock):
+        with patch('rewrite.router.rewrite_queries', rewrite_mock):
             response = self.client.post('/rewrite', json=payload)
 
         self.assertEqual(response.status_code, 200)
@@ -104,7 +104,7 @@ class RewriteEndpointTests(unittest.TestCase):
         result = analysis_result(payload['query'])
         rewrite_mock = AsyncMock(return_value=result)
 
-        with patch('app.rewrite_queries', rewrite_mock):
+        with patch('rewrite.router.rewrite_queries', rewrite_mock):
             response = self.client.post('/rewrite', json=payload)
 
         self.assertEqual(response.status_code, 200)
@@ -129,7 +129,7 @@ class RewriteEndpointTests(unittest.TestCase):
         for payload in invalid_payloads:
             with self.subTest(payload=payload):
                 rewrite_mock = AsyncMock()
-                with patch('app.rewrite_queries', rewrite_mock):
+                with patch('rewrite.router.rewrite_queries', rewrite_mock):
                     response = self.client.post('/rewrite', json=payload)
 
                 self.assertEqual(response.status_code, 422)
@@ -163,7 +163,7 @@ class RewriteEndpointTests(unittest.TestCase):
         for error, expected_status, expected_detail in cases:
             with self.subTest(error=type(error).__name__):
                 rewrite_mock = AsyncMock(side_effect=error)
-                with patch('app.rewrite_queries', rewrite_mock):
+                with patch('rewrite.router.rewrite_queries', rewrite_mock):
                     response = self.client.post('/rewrite', json=payload)
 
                 self.assertEqual(response.status_code, expected_status)

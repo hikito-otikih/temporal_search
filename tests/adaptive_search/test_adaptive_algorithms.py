@@ -9,7 +9,7 @@ from adaptive_search.algorithms import (
     select_refinement_frontier,
     temporal_nms,
 )
-from adaptive_search.models import (
+from adaptive_search.schemas import (
     BoundaryHyperparameters,
     ClusteringHyperparameters,
     EventConstraint,
