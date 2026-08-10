@@ -1,0 +1,2 @@
+﻿query_id,event_id,query_text,ground_truth_video,rank,reciprocal_rank,hit_at_1,hit_at_5,hit_at_10,hit_at_20,hit_at_50,raw_hit_count,unique_video_count,latency_ms,status,error,source
+0_Ifseq4Eg8:E1,E1,thêm dầu muối tiêu và nước cốt chanh vào nho,0_Ifseq4Eg8,1,1.0,1,1,1,1,1,200,116,1106.096,ok,,C:\Users\huynh\Downloads\youcook2\query\0_Ifseq4Eg8.txt

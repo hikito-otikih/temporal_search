@@ -1,0 +1,21 @@
+﻿query_id,event_id,query_text,ground_truth_video,rank,reciprocal_rank,hit_at_1,hit_at_5,hit_at_10,hit_at_20,hit_at_50,raw_hit_count,unique_video_count,latency_ms,status,error,source
+0_Ifseq4Eg8:E1,E1,thêm dầu muối tiêu và nước cốt chanh vào nho,0_Ifseq4Eg8,1,1.0,1,1,1,1,1,200,116,483.761,ok,,C:\Users\huynh\Downloads\youcook2\query\0_Ifseq4Eg8.txt
+0_Ifseq4Eg8:E2,E2,cắt rau diếp,0_Ifseq4Eg8,34,0.029411764705882353,0,0,0,0,1,200,66,1046.244,ok,,C:\Users\huynh\Downloads\youcook2\query\0_Ifseq4Eg8.txt
+0_Ifseq4Eg8:E3,E3,trộn dầu sữa chua mù tạt muối tiêu và nước cốt chanh,0_Ifseq4Eg8,17,0.058823529411764705,0,0,0,1,1,200,94,2701.406,ok,,C:\Users\huynh\Downloads\youcook2\query\0_Ifseq4Eg8.txt
+0_Ifseq4Eg8:E4,E4,cắt một quả táo và thêm vào món salad,0_Ifseq4Eg8,11,0.09090909090909091,0,0,0,1,1,200,56,1947.522,ok,,C:\Users\huynh\Downloads\youcook2\query\0_Ifseq4Eg8.txt
+0IuQKThr-pM:E1,E1,cắt hành tây và tách thành từng khoanh,0IuQKThr-pM,4,0.25,0,1,1,1,1,200,85,2840.016,ok,,C:\Users\huynh\Downloads\youcook2\query\0IuQKThr-pM.txt
+0IuQKThr-pM:E2,E2,trộn hành tây với trứng,0IuQKThr-pM,,0.0,0,0,0,0,0,200,105,2692.638,ok,,C:\Users\huynh\Downloads\youcook2\query\0IuQKThr-pM.txt
+0IuQKThr-pM:E3,E3,thêm muối và hạt tiêu lên trên,0IuQKThr-pM,,0.0,0,0,0,0,0,200,147,3292.596,ok,,C:\Users\huynh\Downloads\youcook2\query\0IuQKThr-pM.txt
+0IuQKThr-pM:E4,E4,nấu các vòng hành tây trong lò,0IuQKThr-pM,3,0.3333333333333333,0,1,1,1,1,200,64,2251.813,ok,,C:\Users\huynh\Downloads\youcook2\query\0IuQKThr-pM.txt
+0JVmVXLrNZo:E1,E1,vỗ một ít thịt vào miếng chả rồi đặt lên chảo,0JVmVXLrNZo,16,0.0625,0,0,0,1,1,200,39,2627.141,ok,,C:\Users\huynh\Downloads\youcook2\query\0JVmVXLrNZo.txt
+0JVmVXLrNZo:E2,E2,lật miếng bánh chín vàng lên,0JVmVXLrNZo,,0.0,0,0,0,0,0,200,85,5232.548,ok,,C:\Users\huynh\Downloads\youcook2\query\0JVmVXLrNZo.txt
+0JVmVXLrNZo:E3,E3,lật miếng bánh lại,0JVmVXLrNZo,,0.0,0,0,0,0,0,200,117,4380.503,ok,,C:\Users\huynh\Downloads\youcook2\query\0JVmVXLrNZo.txt
+0JVmVXLrNZo:E4,E4,đặt miếng thịt cà chua hành tây và rau diếp vào trong hai chiếc bánh,0JVmVXLrNZo,7,0.14285714285714285,0,0,1,1,1,200,60,3672.772,ok,,C:\Users\huynh\Downloads\youcook2\query\0JVmVXLrNZo.txt
+0Mz4NTozNXw:E1,E1,kết hợp bột mì khoai tây nghiền ăn liền và ớt cayenne,0Mz4NTozNXw,,0.0,0,0,0,0,0,200,105,4256.771,ok,,C:\Users\huynh\Downloads\youcook2\query\0Mz4NTozNXw.txt
+0Mz4NTozNXw:E2,E2,cắt hành tây thành từng khoanh,0Mz4NTozNXw,,0.0,0,0,0,0,0,200,86,1060.935,ok,,C:\Users\huynh\Downloads\youcook2\query\0Mz4NTozNXw.txt
+0Mz4NTozNXw:E3,E3,phủ các khoanh hành tây vào vụn bánh mì,0Mz4NTozNXw,1,1.0,1,1,1,1,1,200,56,787.622,ok,,C:\Users\huynh\Downloads\youcook2\query\0Mz4NTozNXw.txt
+0Mz4NTozNXw:E4,E4,chiên ngập dầu hành tây,0Mz4NTozNXw,,0.0,0,0,0,0,0,200,92,2665.239,ok,,C:\Users\huynh\Downloads\youcook2\query\0Mz4NTozNXw.txt
+0O4bxhpFX9o:E1,E1,đặt các lát thịt xông khói lên chảo nướng và nướng chúng trong lò nướng,0O4bxhpFX9o,17,0.058823529411764705,0,0,0,1,1,200,61,2143.077,ok,,C:\Users\huynh\Downloads\youcook2\query\0O4bxhpFX9o.txt
+0O4bxhpFX9o:E2,E2,cắt cà chua thành lát mỏng,0O4bxhpFX9o,54,0.018518518518518517,0,0,0,0,0,200,67,1772.866,ok,,C:\Users\huynh\Downloads\youcook2\query\0O4bxhpFX9o.txt
+0O4bxhpFX9o:E3,E3,nướng các lát bánh mì trong lò nướng bánh,0O4bxhpFX9o,,0.0,0,0,0,0,0,200,58,3078.261,ok,,C:\Users\huynh\Downloads\youcook2\query\0O4bxhpFX9o.txt
+0O4bxhpFX9o:E4,E4,phủ bánh mì lên trên bánh sandwich,0O4bxhpFX9o,32,0.03125,0,0,0,0,1,200,59,2345.929,ok,,C:\Users\huynh\Downloads\youcook2\query\0O4bxhpFX9o.txt

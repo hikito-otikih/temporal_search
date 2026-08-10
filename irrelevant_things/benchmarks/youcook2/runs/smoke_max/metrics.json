@@ -1,0 +1,27 @@
+{
+  "query_count": 2,
+  "evaluated_count": 2,
+  "error_count": 0,
+  "completion_rate": 1.0,
+  "recall_at_1": 0.5,
+  "recall_at_5": 0.5,
+  "recall_at_10": 0.5,
+  "recall_at_20": 0.5,
+  "recall_at_50": 1.0,
+  "mrr": 0.5147058823529411,
+  "median_rank": 17.5,
+  "median_rank_definition": "missing ground truth is censored at unique_video_count + 1",
+  "median_rank_found": 17.5,
+  "ground_truth_found_count": 2,
+  "mean_latency_ms": 2013.667,
+  "schema_version": "youcook2-video-recall/v1",
+  "aggregation": "max",
+  "frame_top_k": 200,
+  "recall_ks": [
+    1,
+    5,
+    10,
+    20,
+    50
+  ]
+}

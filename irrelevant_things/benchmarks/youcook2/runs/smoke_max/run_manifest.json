@@ -1,0 +1,81 @@
+{
+  "schema_version": "youcook2-video-recall/v1",
+  "status": "completed",
+  "started_at": "2026-08-09T08:03:56.037968+00:00",
+  "updated_at": "2026-08-09T08:04:00.285863+00:00",
+  "source": {
+    "type": "youcook2_query_txt",
+    "path": "C:\\Users\\huynh\\Downloads\\youcook2\\query",
+    "query_mode": "event",
+    "limit": 2,
+    "source_file_count": 200,
+    "loaded_query_count": 2
+  },
+  "source_fingerprint": "d2e993197fed59dd5ce0f71df9ab11b600de13c970423c9a88261c4b129f113f",
+  "query_count": 2,
+  "config": {
+    "base_url": "http://127.0.0.1:8000",
+    "frame_top_k": 200,
+    "recall_ks": [
+      1,
+      5,
+      10,
+      20,
+      50
+    ],
+    "aggregation": "max",
+    "top_m": 3,
+    "temperature": 1.0,
+    "timeout_seconds": 30.0,
+    "retries": 2,
+    "retry_backoff_seconds": 0.5
+  },
+  "request_payload_fields": [
+    "query",
+    "top_k"
+  ],
+  "ground_truth_sent_to_backend": false,
+  "api_health": {
+    "status": "ok",
+    "model": "google/siglip-base-patch16-224",
+    "device": "cuda",
+    "dtype": "torch.float16",
+    "store": "LocalStore",
+    "n_vectors": 117344
+  },
+  "runtime": {
+    "python": "3.13.9 | packaged by Anaconda, Inc. | (main, Oct 21 2025, 19:09:58) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "completed_at": "2026-08-09T08:04:00.285882+00:00",
+  "metrics_file": "metrics.json",
+  "results_jsonl_file": "query_results.jsonl",
+  "results_csv_file": "query_results.csv",
+  "metrics": {
+    "query_count": 2,
+    "evaluated_count": 2,
+    "error_count": 0,
+    "completion_rate": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_5": 0.5,
+    "recall_at_10": 0.5,
+    "recall_at_20": 0.5,
+    "recall_at_50": 1.0,
+    "mrr": 0.5147058823529411,
+    "median_rank": 17.5,
+    "median_rank_definition": "missing ground truth is censored at unique_video_count + 1",
+    "median_rank_found": 17.5,
+    "ground_truth_found_count": 2,
+    "mean_latency_ms": 2013.667,
+    "schema_version": "youcook2-video-recall/v1",
+    "aggregation": "max",
+    "frame_top_k": 200,
+    "recall_ks": [
+      1,
+      5,
+      10,
+      20,
+      50
+    ]
+  }
+}
