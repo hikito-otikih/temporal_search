@@ -1,4 +1,4 @@
-from video_clustering_schema import ClusteredCandidate
+from ..schemas import ClusteredCandidate
 import heapq
 from itertools import count
 class AmbiguousSearcher :

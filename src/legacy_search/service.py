@@ -1,21 +1,20 @@
-from sendRequests import search_queries
-from video_clustering import cluster_videos
+from .client import search_queries
+from .utils import cluster_videos
 from itertools import count
-from video_clustering_schema import ClusteredCandidate
+from .schemas import ClusteredCandidate
 import json
-from searcher.TemporalSearcher import TemporalSearcher
-from searcher.AmbiguousSearcher import AmbiguousSearcher
+from .searchers.temporal import TemporalSearcher
+from .searchers.ambiguous import AmbiguousSearcher
 import pandas as pd
 from json import JSONDecodeError
 
-# from pathlib import Path
-# from pydantic import TypeAdapter
+from .constants import MAP_KEYFRAMES_CSV_PATH, OBJECT_DETECTIONS_JSON_PATH
 
 def check_object_satisfaction(clustered_videos, object_name_list, objectThreshold):
     required_object_names = set(object_name_list or [])
     for video in clustered_videos:
         video_name = video.video_name[:-4]  # Remove .mp4 extension
-        map_frame_id_file = pd.read_csv(f"data/map-keyframes/{video_name}.csv")
+        map_frame_id_file = pd.read_csv(MAP_KEYFRAMES_CSV_PATH.format(video_name=video_name))
         for result in video.results:
             matching_rows = map_frame_id_file[map_frame_id_file['frame_idx'] == result.frame_index]
             if matching_rows.empty:
@@ -23,7 +22,7 @@ def check_object_satisfaction(clustered_videos, object_name_list, objectThreshol
                 continue
 
             index = matching_rows.index[0]
-            object_file_path = f"data/objects/{video_name}/{index:03d}.json"
+            object_file_path = OBJECT_DETECTIONS_JSON_PATH.format(video_name=video_name, index=index)
 
             try:
                 with open(object_file_path, "r", encoding="utf-8") as f:

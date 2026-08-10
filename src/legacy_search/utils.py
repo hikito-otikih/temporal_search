@@ -1,7 +1,7 @@
 
-from typing import Dict 
+from typing import Dict
 import json
-from video_clustering_schema import ClusteredCandidate, Videos
+from .schemas import ClusteredCandidate, Videos
 
 
 def cluster_videos(candidate_frames: list) -> list:
@@ -18,7 +18,7 @@ def cluster_videos(candidate_frames: list) -> list:
     return [Videos(video_name=video_name, results=frames) for video_name, frames in videos.items()]
 
 if __name__ == "__main__":
-    from sendRequests import search_queries
+    from .client import search_queries
     query0 = "cat"
     query1 = "dog"
     top_k = 5

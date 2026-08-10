@@ -6,7 +6,7 @@ from urllib import request
 
 from pydantic import TypeAdapter
 
-from response_schema import QueryResponse
+from .schemas import QueryResponse
 
 
 def upstream_search_url() -> str:
