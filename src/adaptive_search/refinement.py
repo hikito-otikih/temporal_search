@@ -19,33 +19,24 @@ from .embedding import (
     TextImageEmbedder,
     score_event_frames,
 )
-from .models import EventDefinition, FrameScoreSample, ModelRuntimeSpec, TemporalRegion
+from .exceptions import (
+    AdaptiveInputError,
+    LiveRefinementConfigurationError,
+    LiveRefinementDataError,
+    LiveRefinementUnavailableError,
+    RevisionConflictError,
+)
+from .schemas import EventDefinition, FrameScoreSample, ModelRuntimeSpec, TemporalRegion
 from .providers import (
     FrameProviderCapabilities,
     FrameProviderError,
     FrameReference,
 )
-from .service import AdaptiveInputError, AdaptiveSearchService
-from .session import RevisionConflictError, SearchRun, SessionBundle
+from .service import AdaptiveSearchService
+from .session import SearchRun, SessionBundle
 
 
 MetricValue = int | float | str | bool | None
-
-
-class LiveRefinementError(RuntimeError):
-    """Base error for live refinement failures."""
-
-
-class LiveRefinementUnavailableError(LiveRefinementError):
-    """Decoder or model runtime is unavailable before any work starts."""
-
-
-class LiveRefinementConfigurationError(LiveRefinementError):
-    """Injected model identity differs from the pinned session spec."""
-
-
-class LiveRefinementDataError(LiveRefinementError):
-    """A provider response violates the canonical frame contract."""
 
 
 @dataclass(frozen=True)

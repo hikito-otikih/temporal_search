@@ -15,7 +15,7 @@ from .algorithms import (
 )
 from .proposal_profiles import generate_profiled_proposals
 from .retrieval import fuse_candidates_rrf
-from .models import (
+from .schemas import (
     AdjacentGapConstraint,
     BoundaryHyperparameters,
     ClusteringHyperparameters,

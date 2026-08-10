@@ -9,7 +9,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .models import (
+from .exceptions import RevisionConflictError, SessionNotFoundError
+from .schemas import (
     EventDefinition,
     EventProposal,
     FrameScoreSample,
@@ -94,19 +95,6 @@ class SessionBundle(SessionModel):
     session: SearchSession
     artifacts: ArtifactState = Field(default_factory=ArtifactState)
     runs: list[SearchRun] = Field(default_factory=list)
-
-
-class SessionNotFoundError(KeyError):
-    pass
-
-
-class RevisionConflictError(RuntimeError):
-    def __init__(self, expected: int, actual: int) -> None:
-        self.expected = expected
-        self.actual = actual
-        super().__init__(
-            f"stale session revision: expected {expected}, current revision is {actual}"
-        )
 
 
 class InMemorySessionRepository:

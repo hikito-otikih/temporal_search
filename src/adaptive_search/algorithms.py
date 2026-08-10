@@ -13,7 +13,7 @@ from hashlib import sha256
 from math import exp, isclose
 from statistics import fmean, median
 
-from .models import (
+from .schemas import (
     AdjacentGapConstraint,
     BoundaryHyperparameters,
     ClusteringHyperparameters,
@@ -977,7 +977,7 @@ def assemble_ordered_tuples(
     """Assemble ordered, same-video event tuples under hard and soft limits."""
 
     # Avoid a circular annotation import solely for a default constructor.
-    from .models import RankingHyperparameters
+    from .schemas import RankingHyperparameters
 
     constraints = constraints or SearchConstraints()
     parameters = parameters or RankingHyperparameters()

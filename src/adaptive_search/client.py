@@ -19,11 +19,8 @@ from urllib import error, request
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .models import SparseCandidate
-
-
-class UpstreamSearchError(RuntimeError):
-    """Raised when the external sparse-search service cannot be trusted."""
+from .exceptions import UpstreamSearchError
+from .schemas import SparseCandidate
 
 
 class UpstreamHit(BaseModel):

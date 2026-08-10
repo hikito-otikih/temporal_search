@@ -12,13 +12,14 @@ from .algorithms import (
     prioritize_videos,
     select_refinement_frontier,
 )
+from .exceptions import AdaptiveInputError, RevisionConflictError
 from .invalidation import (
     changed_paths,
     invalidated_for_constraint,
     invalidated_for_event,
     invalidated_for_parameters,
 )
-from .models import (
+from .schemas import (
     EventConstraint,
     EventDefinition,
     EventProposal,
@@ -38,10 +39,6 @@ from .session import (
     new_run,
     utc_now,
 )
-
-
-class AdaptiveInputError(ValueError):
-    pass
 
 
 class AdaptiveSearchService:
@@ -583,8 +580,6 @@ def _event_index(bundle: SessionBundle, event_id: str) -> int:
 def _require_revision(bundle: SessionBundle, expected_revision: int) -> None:
     actual = bundle.session.revision
     if actual != expected_revision:
-        from .session import RevisionConflictError
-
         raise RevisionConflictError(expected_revision, actual)
 
 

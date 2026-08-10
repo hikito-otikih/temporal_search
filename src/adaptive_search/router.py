@@ -3,26 +3,57 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-import os
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from rewrite_queries import (
+from rewrite.exceptions import (
     ConfigurationError,
     OllamaRateLimitError,
     OllamaServiceError,
     OllamaTimeoutError,
 )
-from rewrite_schema import RewriteRequest
+from rewrite.schemas import RewriteRequest
 
+from .constants import (
+    ERROR_CODE_INVALID_ADAPTIVE_INPUT,
+    ERROR_CODE_LIVE_REFINEMENT_CONFIGURATION_ERROR,
+    ERROR_CODE_LIVE_REFINEMENT_DATA_ERROR,
+    ERROR_CODE_LIVE_REFINEMENT_UNAVAILABLE,
+    ERROR_CODE_OLLAMA_NOT_CONFIGURED,
+    ERROR_CODE_OLLAMA_RATE_LIMITED,
+    ERROR_CODE_OLLAMA_SERVICE_ERROR,
+    ERROR_CODE_OLLAMA_TIMEOUT,
+    ERROR_CODE_REVISION_CONFLICT,
+    ERROR_CODE_SESSION_NOT_FOUND,
+    ERROR_CODE_UPSTREAM_SEARCH_ERROR,
+    ROUTER_PREFIX,
+    ROUTER_TAGS,
+    SUPPORTED_BOUNDARY_PROFILES,
+    SUPPORTED_RELATIONS,
+)
+from .dependencies import (
+    adaptive_service,
+    configure_live_refinement_runtime,
+    live_refinement_orchestrator,
+    upstream_search_client,
+)
 from .embedding import (
     DEFAULT_SIGLIP2_MODEL,
     QUALITY_QWEN_EMBEDDING_MODEL,
     QUALITY_QWEN_RERANKER_MODEL,
 )
-from .models import (
+from .exceptions import (
+    AdaptiveInputError,
+    LiveRefinementConfigurationError,
+    LiveRefinementDataError,
+    LiveRefinementUnavailableError,
+    RevisionConflictError,
+    SessionNotFoundError,
+    UpstreamSearchError,
+)
+from .schemas import (
     BoundaryType,
     EventDefinition,
     FrameScoreSample,
@@ -30,43 +61,17 @@ from .models import (
     SearchConstraints,
     SparseCandidate,
 )
-from .refinement import (
-    LiveRefinementConfigurationError,
-    LiveRefinementDataError,
-    LiveRefinementOrchestrator,
-    LiveRefinementUnavailableError,
-)
 from .rewrite_bridge import rewrite_queries_and_build_plan
-from .runtime import configure_from_environment
-from .service import AdaptiveInputError, AdaptiveSearchService
-from .session import (
-    RevisionConflictError,
-    SearchSession,
-    SessionBundle,
-    SessionNotFoundError,
-)
-from .upstream import (
-    QueryVariant,
-    UpstreamSearchClient,
-    UpstreamSearchError,
-)
+from .session import SearchSession, SessionBundle
+from .client import QueryVariant
 
 
-router = APIRouter(prefix="/v1", tags=["adaptive temporal search"])
-adaptive_service = AdaptiveSearchService()
-live_refinement_orchestrator = LiveRefinementOrchestrator(adaptive_service)
-
-upstream_search_client = UpstreamSearchClient(
-    os.getenv("UPSTREAM_URL")
-    or os.getenv("ADAPTIVE_UPSTREAM_URL")
-    or os.getenv("UPSTREAM_SEARCH_URL")
-    or "http://172.26.176.1:8000"
-)
+router = APIRouter(prefix=ROUTER_PREFIX, tags=ROUTER_TAGS)
 
 
 @router.on_event("startup")
-def configure_live_refinement_runtime() -> None:
-    configure_from_environment(adaptive_service, live_refinement_orchestrator)
+def _configure_live_refinement_runtime() -> None:
+    configure_live_refinement_runtime()
 
 
 class ApiModel(BaseModel):
@@ -230,16 +235,8 @@ def list_searchers():
                 "runtime_model_spec": capability.runtime_model_spec,
                 "quality_embedding_model": QUALITY_QWEN_EMBEDDING_MODEL,
                 "quality_reranker_model": QUALITY_QWEN_RERANKER_MODEL,
-                "supported_relations": ["ordered_sequence", "adjacent_gap"],
-                "supported_boundary_profiles": [
-                    "onset",
-                    "offset",
-                    "transition",
-                    "state",
-                    "plateau_start",
-                    "symmetric_peak",
-                    "unknown",
-                ],
+                "supported_relations": SUPPORTED_RELATIONS,
+                "supported_boundary_profiles": SUPPORTED_BOUNDARY_PROFILES,
             },
         ]
     }
@@ -737,35 +734,35 @@ def _raise_api_error(exc: Exception):
         raise HTTPException(
             status_code=500,
             detail={
-                "code": "ollama_not_configured",
+                "code": ERROR_CODE_OLLAMA_NOT_CONFIGURED,
                 "message": "OLLAMA_API_KEY is not configured",
             },
         ) from exc
     if isinstance(exc, OllamaTimeoutError):
         raise HTTPException(
             status_code=504,
-            detail={"code": "ollama_timeout", "message": str(exc)},
+            detail={"code": ERROR_CODE_OLLAMA_TIMEOUT, "message": str(exc)},
         ) from exc
     if isinstance(exc, OllamaRateLimitError):
         raise HTTPException(
             status_code=503,
-            detail={"code": "ollama_rate_limited", "message": str(exc)},
+            detail={"code": ERROR_CODE_OLLAMA_RATE_LIMITED, "message": str(exc)},
         ) from exc
     if isinstance(exc, OllamaServiceError):
         raise HTTPException(
             status_code=502,
-            detail={"code": "ollama_service_error", "message": str(exc)},
+            detail={"code": ERROR_CODE_OLLAMA_SERVICE_ERROR, "message": str(exc)},
         ) from exc
     if isinstance(exc, UpstreamSearchError):
         raise HTTPException(
             status_code=502,
-            detail={"code": "upstream_search_error", "message": str(exc)},
+            detail={"code": ERROR_CODE_UPSTREAM_SEARCH_ERROR, "message": str(exc)},
         ) from exc
     if isinstance(exc, LiveRefinementUnavailableError):
         raise HTTPException(
             status_code=503,
             detail={
-                "code": "live_refinement_unavailable",
+                "code": ERROR_CODE_LIVE_REFINEMENT_UNAVAILABLE,
                 "message": str(exc),
             },
         ) from exc
@@ -774,9 +771,9 @@ def _raise_api_error(exc: Exception):
         (LiveRefinementConfigurationError, LiveRefinementDataError),
     ):
         code = (
-            "live_refinement_configuration_error"
+            ERROR_CODE_LIVE_REFINEMENT_CONFIGURATION_ERROR
             if isinstance(exc, LiveRefinementConfigurationError)
-            else "live_refinement_data_error"
+            else ERROR_CODE_LIVE_REFINEMENT_DATA_ERROR
         )
         raise HTTPException(
             status_code=422,
@@ -785,13 +782,13 @@ def _raise_api_error(exc: Exception):
     if isinstance(exc, SessionNotFoundError):
         raise HTTPException(
             status_code=404,
-            detail={"code": "session_not_found", "message": "session not found"},
+            detail={"code": ERROR_CODE_SESSION_NOT_FOUND, "message": "session not found"},
         ) from exc
     if isinstance(exc, RevisionConflictError):
         raise HTTPException(
             status_code=409,
             detail={
-                "code": "revision_conflict",
+                "code": ERROR_CODE_REVISION_CONFLICT,
                 "message": str(exc),
                 "expected_revision": exc.expected,
                 "current_revision": exc.actual,
@@ -800,6 +797,6 @@ def _raise_api_error(exc: Exception):
     if isinstance(exc, (AdaptiveInputError, ValidationError, ValueError)):
         raise HTTPException(
             status_code=422,
-            detail={"code": "invalid_adaptive_input", "message": str(exc)},
+            detail={"code": ERROR_CODE_INVALID_ADAPTIVE_INPUT, "message": str(exc)},
         ) from exc
     raise exc

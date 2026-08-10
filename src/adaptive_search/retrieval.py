@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from hashlib import sha256
 
-from .models import RetrievalHyperparameters, SparseCandidate
+from .schemas import RetrievalHyperparameters, SparseCandidate
 
 
 def fuse_candidates_rrf(

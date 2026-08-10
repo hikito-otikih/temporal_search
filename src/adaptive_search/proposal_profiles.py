@@ -13,7 +13,7 @@ from .algorithms import (
     robust_sigmoid,
     temporal_nms,
 )
-from .models import (
+from .schemas import (
     BoundaryHyperparameters,
     EventDefinition,
     EventProposal,

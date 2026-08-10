@@ -11,10 +11,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-from rewrite_queries import rewrite_queries
-from rewrite_schema import RewriteResponse
+from rewrite.service import rewrite_queries
+from rewrite.schemas import RewriteResponse
 
-from .models import BoundaryType, EventDefinition
+from .schemas import BoundaryType, EventDefinition
 
 BOUNDARY_MAPPING: dict[str, BoundaryType] = {
     "start": "onset",
