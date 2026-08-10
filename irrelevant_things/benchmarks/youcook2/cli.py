@@ -12,11 +12,20 @@ from .client import SearchApiError, SearchClient
 from .core import (
     DatasetFormatError,
     QueryRecord,
+    VideoQueryGroup,
     load_official_annotations,
     load_query_directory,
+    load_query_directory_grouped,
     load_query_manifest,
 )
 from .runner import RunConfig, evaluation_fingerprint, run_benchmark, source_fingerprint
+from .tuple_client import BackendApiError
+from .tuple_runner import (
+    TupleRunConfig,
+    evaluation_fingerprint as tuple_evaluation_fingerprint,
+    run_tuple_benchmark,
+    source_fingerprint as tuple_source_fingerprint,
+)
 from .video_manifest import load_video_manifest
 
 
@@ -120,6 +129,50 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     run.add_argument("--dry-run", action="store_true", default=defaults.get("dry_run", False))
     run.add_argument("--progress-every", type=int, default=defaults.get("progress_every", 10))
+
+    tuple_run = subparsers.add_parser(
+        "tuple-run",
+        help="run or resume the tuple-level (whole-video) ablation benchmark",
+    )
+    tuple_run.add_argument(
+        "--query-dir",
+        default=defaults.get("query_dir"),
+        help="directory of YouCook2 query TXT files (the only supported source)",
+    )
+    tuple_run.add_argument(
+        "--pipeline",
+        choices=("legacy_temporal", "legacy_ambiguous", "adaptive_coarse", "adaptive_full"),
+        default=defaults.get("pipeline"),
+    )
+    tuple_run.add_argument(
+        "--backend-base-url",
+        default=defaults.get("backend_base_url", "http://127.0.0.1:8001"),
+        help="this repo's own FastAPI app (src/main.py), not the sparse-search service",
+    )
+    tuple_run.add_argument("--top-k-tuple", type=int, default=defaults.get("top_k_tuple", 100))
+    tuple_run.add_argument("--top-k-each-query", type=int, default=defaults.get("top_k_each_query", 100))
+    tuple_run.add_argument("--gamma", type=float, default=defaults.get("gamma", 0.05))
+    tuple_run.add_argument("--adaptive-top-k", type=int, default=defaults.get("adaptive_top_k", 20))
+    tuple_run.add_argument(
+        "--recall-k", type=_csv_ints, default=_csv_ints(defaults.get("recall_k", "1,5,10,20,50"))
+    )
+    tuple_run.add_argument("--output-dir", default=defaults.get("output_dir"))
+    tuple_run.add_argument("--limit", type=int, default=defaults.get("limit"), help="deterministic first-N smoke run")
+    tuple_run.add_argument("--resume", action="store_true", default=defaults.get("resume", False))
+    tuple_run.add_argument(
+        "--force-resume",
+        action="store_true",
+        default=defaults.get("force_resume", False),
+        help=(
+            "deprecated safety flag: incompatible runs are never mixed; "
+            "use a new output directory"
+        ),
+    )
+    tuple_run.add_argument("--dry-run", action="store_true", default=defaults.get("dry_run", False))
+    tuple_run.add_argument("--timeout", type=float, default=defaults.get("timeout", 60.0))
+    tuple_run.add_argument("--retries", type=int, default=defaults.get("retries", 2))
+    tuple_run.add_argument("--retry-backoff", type=float, default=defaults.get("retry_backoff", 0.5))
+    tuple_run.add_argument("--progress-every", type=int, default=defaults.get("progress_every", 10))
     return parser
 
 
@@ -169,6 +222,77 @@ def _load_records(args: argparse.Namespace) -> tuple[list[QueryRecord], Path, di
     return records, source_path, description
 
 
+def _load_groups(args: argparse.Namespace) -> tuple[list[VideoQueryGroup], Path, dict[str, Any]]:
+    if not args.query_dir:
+        raise DatasetFormatError("tuple-run requires --query-dir (the only supported source)")
+    source_path = Path(args.query_dir)
+    groups = load_query_directory_grouped(source_path)
+    description: dict[str, Any] = {
+        "type": "youcook2_query_txt_grouped",
+        "path": str(source_path),
+    }
+    if args.limit is not None:
+        if args.limit < 1:
+            raise DatasetFormatError("--limit must be positive")
+        groups = groups[: args.limit]
+        description["limit"] = args.limit
+    return groups, source_path, description
+
+
+def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if not args.pipeline:
+        parser.error("tuple-run requires --pipeline")
+
+    groups, source_path, description = _load_groups(args)
+    file_digest, source_file_count = tuple_source_fingerprint(source_path)
+    description["source_file_count"] = source_file_count
+    description["loaded_group_count"] = len(groups)
+    digest = tuple_evaluation_fingerprint(file_digest, description, groups)
+    plan = {
+        "source": description,
+        "source_file_fingerprint": file_digest,
+        "source_fingerprint": digest,
+        "group_count": len(groups),
+        "sample_groups": [
+            {"video_id": group.video_id, "events": list(group.events)} for group in groups[:3]
+        ],
+        "backend_base_url": args.backend_base_url,
+        "pipeline": args.pipeline,
+        "ground_truth_sent_to_backend": False,
+        "recall_ks": list(args.recall_k),
+    }
+    if args.dry_run:
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return 0
+    if not args.output_dir:
+        parser.error("tuple-run requires --output-dir unless --dry-run is used")
+
+    config = TupleRunConfig(
+        backend_base_url=args.backend_base_url.rstrip("/."),
+        pipeline=args.pipeline,
+        top_k_tuple=args.top_k_tuple,
+        top_k_each_query=args.top_k_each_query,
+        gamma=args.gamma,
+        adaptive_top_k=args.adaptive_top_k,
+        recall_ks=tuple(args.recall_k),
+        timeout_seconds=args.timeout,
+        retries=args.retries,
+        retry_backoff_seconds=args.retry_backoff,
+    )
+    metrics, _ = run_tuple_benchmark(
+        groups=groups,
+        output_dir=args.output_dir,
+        config=config,
+        source_description=description,
+        source_digest=digest,
+        resume=args.resume,
+        force_resume=args.force_resume,
+        progress_every=args.progress_every,
+    )
+    print(json.dumps(metrics, ensure_ascii=False, indent=2))
+    return 0 if metrics["error_count"] == 0 else 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     _configure_utf8_console()
     argv = list(argv if argv is not None else sys.argv[1:])
@@ -180,6 +304,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             client = SearchClient(args.base_url, timeout_seconds=args.timeout, retries=args.retries)
             print(json.dumps(client.health(), ensure_ascii=False, indent=2))
             return 0
+
+        if args.command == "tuple-run":
+            return _run_tuple_command(args, parser)
 
         records, source_path, description = _load_records(args)
         file_digest, source_file_count = source_fingerprint(source_path)
@@ -233,7 +360,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(metrics, ensure_ascii=False, indent=2))
         return 0 if metrics["error_count"] == 0 else 2
-    except (DatasetFormatError, FileNotFoundError, FileExistsError, SearchApiError, ValueError) as exc:
+    except (
+        DatasetFormatError,
+        FileNotFoundError,
+        FileExistsError,
+        SearchApiError,
+        BackendApiError,
+        ValueError,
+    ) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 

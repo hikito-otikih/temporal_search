@@ -53,6 +53,7 @@ from .exceptions import (
     SessionNotFoundError,
     UpstreamSearchError,
 )
+from .algorithms import prioritize_videos
 from .schemas import (
     BoundaryType,
     EventDefinition,
@@ -566,6 +567,25 @@ def get_proposals(
             and (video_id is None or item.video_id == video_id)
         ]
         return _page(items, offset, limit)
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+@router.get("/search-sessions/{session_id}/video-priorities")
+def get_video_priorities(
+    session_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    try:
+        bundle = adaptive_service.get_session(session_id)
+        priorities = prioritize_videos(
+            bundle.artifacts.regions,
+            [event.event_id for event in bundle.session.events],
+            bundle.session.hyperparameters.refinement,
+            bundle.session.constraints,
+        )
+        return _page(priorities, offset, limit)
     except Exception as exc:
         _raise_api_error(exc)
 

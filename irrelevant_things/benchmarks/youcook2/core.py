@@ -134,7 +134,33 @@ def parse_timestamp(value: str) -> float:
     return numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
 
 
-def _parse_query_file(path: Path, query_mode: str) -> list[QueryRecord]:
+@dataclass(frozen=True)
+class VideoQueryGroup:
+    """One video's ordered, multi-event ground truth, kept together.
+
+    Unlike `QueryRecord` (one row per event, or one flattened row per video),
+    this preserves the event order and per-event answers as a unit so a tuple
+    benchmark can send them as a single ordered `query` list, matching what
+    `/temporal-search` and an adaptive session actually consume.
+    """
+
+    video_id: str
+    source: str
+    context: str | None
+    events: tuple[tuple[str, str], ...]
+    answers: Mapping[str, tuple[float, float]]
+
+
+def _parse_query_file_raw(
+    path: Path,
+) -> tuple[str, str, str | None, list[tuple[str, str]], dict[str, tuple[float, float]]]:
+    """Parse one query TXT file into its raw video/event/answer structure.
+
+    Shared by `_parse_query_file` (which flattens to per-event/per-file
+    `QueryRecord`s) and `load_query_directory_grouped` (which keeps a video's
+    events together as one `VideoQueryGroup`).
+    """
+
     text = path.read_text(encoding="utf-8-sig")
     lines = text.splitlines()
     before_answer = True
@@ -180,6 +206,12 @@ def _parse_query_file(path: Path, query_mode: str) -> list[QueryRecord]:
     if missing_answers:
         raise DatasetFormatError(f"{path}: missing answers for {', '.join(missing_answers)}")
 
+    return video_id, str(path), context, events, answers
+
+
+def _parse_query_file(path: Path, query_mode: str) -> list[QueryRecord]:
+    video_id, source, context, events, answers = _parse_query_file_raw(path)
+
     if query_mode == "file":
         parts = ([context] if context else []) + [text for _, text in events]
         return [
@@ -187,7 +219,7 @@ def _parse_query_file(path: Path, query_mode: str) -> list[QueryRecord]:
                 query_id=f"{video_id}:all",
                 query_text=" ".join(parts),
                 ground_truth_video=video_id,
-                source=str(path),
+                source=source,
                 context=context,
                 metadata={"event_count": len(events)},
             )
@@ -206,7 +238,7 @@ def _parse_query_file(path: Path, query_mode: str) -> list[QueryRecord]:
                 query_id=f"{video_id}:{event_id}",
                 query_text=retrieval_text,
                 ground_truth_video=video_id,
-                source=str(path),
+                source=source,
                 event_id=event_id,
                 context=context,
                 start_seconds=start,
@@ -238,6 +270,44 @@ def load_query_directory(path: str | Path, query_mode: str = "event") -> list[Qu
     records = [record for file_path in files for record in _parse_query_file(file_path, query_mode)]
     _ensure_unique_query_ids(records)
     return records
+
+
+def load_query_directory_grouped(path: str | Path) -> list[VideoQueryGroup]:
+    """Load one `VideoQueryGroup` per query file, preserving event order.
+
+    Unlike `load_query_directory`, this keeps a video's events together as an
+    ordered tuple instead of flattening them into independent `QueryRecord`s,
+    so a tuple-level benchmark can send them as a single ordered `query` list.
+    """
+
+    directory = Path(path)
+    if not directory.is_dir():
+        raise DatasetFormatError(f"query directory does not exist: {directory}")
+    files = sorted(directory.glob("*.txt"))
+    if not files:
+        raise DatasetFormatError(f"no .txt query files found in {directory}")
+    groups: list[VideoQueryGroup] = []
+    for file_path in files:
+        video_id, source, context, events, answers = _parse_query_file_raw(file_path)
+        groups.append(
+            VideoQueryGroup(
+                video_id=video_id,
+                source=source,
+                context=context,
+                events=tuple(events),
+                answers=answers,
+            )
+        )
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for group in groups:
+        if group.video_id in seen:
+            duplicates.add(group.video_id)
+        seen.add(group.video_id)
+    if duplicates:
+        sample = ", ".join(sorted(duplicates)[:5])
+        raise DatasetFormatError(f"duplicate video_id values across query files: {sample}")
+    return groups
 
 
 def _record_from_mapping(row: Mapping[str, Any], source: str, row_number: int) -> QueryRecord:
