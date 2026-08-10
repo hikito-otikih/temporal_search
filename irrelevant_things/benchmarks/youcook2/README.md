@@ -66,7 +66,7 @@ sent to the backend, so the benchmark cannot accidentally filter by its answer.
 Run commands from the repository root:
 
 ```bash
-cd /home/huynhchiton/projects/temporal_search
+cd /home/huynhchiton/projects/temporal_search/irrelevant_things
 
 python -m benchmarks.youcook2 health \
   --base-url http://127.0.0.1:8000
@@ -77,7 +77,7 @@ started by Windows and WSL is using NAT networking, run the benchmark with
 Windows Python (or pass the Windows host address to `--base-url`):
 
 ```powershell
-$env:PYTHONPATH='\\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search'
+$env:PYTHONPATH='\\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search\irrelevant_things'
 python -m benchmarks.youcook2 health --base-url http://127.0.0.1:8000
 
 python -m benchmarks.youcook2 run `
