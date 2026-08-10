@@ -572,7 +572,7 @@ Ablation nên dùng cùng retrieval budget và cùng split:
 8. + human constraints.
 
 Không tune threshold trên test set. Báo confidence interval theo video/query,
-và tách latency cold-cache/warm-cache. Package `benchmarks/youcook2` đã có để
+và tách latency cold-cache/warm-cache. Package `irrelevant_things/benchmarks/youcook2` đã có để
 đo corpus Video Recall@K qua `http://127.0.0.1:8000/search`, chống ground-truth
 leakage và xuất run manifest/checkpoint. Run hiện có chỉ là smoke/pilot; chưa đủ
 để coi là kết quả full validation hoặc paper, và chưa đánh giá temporal interval.

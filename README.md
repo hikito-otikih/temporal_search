@@ -61,7 +61,7 @@ rewritten. The ordered-frame reranker and motion scorer are not implemented,
 so `use_reranker=true` is rejected and live runs report
 `motion_scores_available=false`.
 
-The self-contained [YouCook2 benchmark](benchmarks/youcook2/README.md) queries
+The self-contained [YouCook2 benchmark](irrelevant_things/benchmarks/youcook2/README.md) queries
 `http://127.0.0.1:8000/search` and measures corpus Video Recall@K without sending
 ground truth to the backend. Current saved runs are smoke/pilot runs only; they
 are not full validation or temporal-boundary results.

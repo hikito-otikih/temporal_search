@@ -9,8 +9,9 @@ production và bỏ qua một số contract đang thiếu trong repository.
 
 Các sửa đổi bắt buộc:
 
-1. Không tạo package `app/` song song với `app.py`; adaptive code nằm trong
-   `adaptive_search/` và được mount bằng FastAPI router.
+1. Không tạo package `app/` song song với entrypoint chính; adaptive code nằm
+   trong `src/adaptive_search/` và được mount bằng FastAPI router (entrypoint
+   hiện là `src/main.py`, trước đây là `app.py` khi repo còn phẳng).
 2. Giữ nguyên `/rewrite` và `/temporal-search` làm legacy contract. API session
    mới có prefix `/v1`.
 3. Dùng `pts_ms` hoặc `timestamp_seconds` làm trục thời gian adaptive;

@@ -88,7 +88,8 @@ cost hiện tại; persistent catalog cache vẫn là optimization sau này.
 Khởi động API sau khi export environment:
 
 ```bash
-python app.py
+pip install -e .
+python src/main.py
 ```
 
 Luồng:
@@ -151,7 +152,7 @@ không commit frame score.
 
 ## 5. Video Recall@K benchmark
 
-Package: `benchmarks/youcook2/`.
+Package: `irrelevant_things/benchmarks/youcook2/`.
 
 Mục tiêu hiện tại chỉ là:
 
@@ -171,7 +172,7 @@ API port 8000 hiện chạy trong Windows network namespace, do đó chạy bằ
 Python là cách trực tiếp nhất:
 
 ```powershell
-cd \\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search
+cd \\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search\irrelevant_things
 
 python -m benchmarks.youcook2 health `
   --base-url http://127.0.0.1:8000
