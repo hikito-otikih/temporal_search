@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -69,9 +70,10 @@ class FakeBackendHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler contract
         self._record("GET", None)
-        if self.path.endswith("/video-priorities"):
+        path = urllib.parse.urlsplit(self.path).path
+        if path.endswith("/video-priorities"):
             self._json({"items": self.video_priorities, "total": len(self.video_priorities), "offset": 0, "limit": 100})
-        elif self.path.endswith("/tuples"):
+        elif path.endswith("/tuples"):
             self._json({"items": self.tuples, "total": len(self.tuples), "offset": 0, "limit": 20})
         else:
             self._json({"detail": "not found"}, 404)
@@ -123,7 +125,7 @@ class TupleRunnerTests(unittest.TestCase):
         FakeBackendHandler.requests = []
         FakeBackendHandler.refine_available = True
 
-    def _config(self, pipeline: str) -> TupleRunConfig:
+    def _config(self, pipeline: str, **overrides) -> TupleRunConfig:
         return TupleRunConfig(
             backend_base_url=self.base_url,
             pipeline=pipeline,
@@ -135,6 +137,7 @@ class TupleRunnerTests(unittest.TestCase):
             timeout_seconds=2.0,
             retries=0,
             retry_backoff_seconds=0.0,
+            **overrides,
         )
 
     def _group(self):
@@ -245,6 +248,57 @@ class TupleRunnerTests(unittest.TestCase):
         self.assertEqual(rows[0]["rank"], 1)
         self.assertEqual(rows[0]["event_timestamp_accuracy"], {"E1": True, "E2": True})
         self.assertEqual(metrics["recall_at_1"], 1.0)
+
+    def test_adaptive_ranking_top_k_overrides_session_hyperparameters(self) -> None:
+        group = self._group()
+        with tempfile.TemporaryDirectory() as output_dir:
+            run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config("adaptive_full", adaptive_ranking_top_k=100),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        payload = next(
+            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
+        )
+        self.assertEqual(payload["hyperparameters"], {"ranking": {"top_k": 100}})
+
+    def test_adaptive_ranking_top_k_caps_video_priorities_page_for_coarse(self) -> None:
+        group = self._group()
+        with tempfile.TemporaryDirectory() as output_dir:
+            run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config("adaptive_coarse", adaptive_ranking_top_k=250),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        path = next(
+            path
+            for method, path, _ in FakeBackendHandler.requests
+            if method == "GET" and "/video-priorities" in path
+        )
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
+        self.assertEqual(query["limit"], ["250"])
+
+    def test_adaptive_coarse_does_not_send_ranking_hyperparameters(self) -> None:
+        group = self._group()
+        with tempfile.TemporaryDirectory() as output_dir:
+            run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config("adaptive_coarse", adaptive_ranking_top_k=100),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        payload = next(
+            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
+        )
+        self.assertNotIn("hyperparameters", payload)
 
     def test_resume_skips_completed_and_unavailable_groups(self) -> None:
         FakeBackendHandler.refine_available = False

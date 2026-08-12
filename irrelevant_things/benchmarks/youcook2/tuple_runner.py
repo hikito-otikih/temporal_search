@@ -53,6 +53,19 @@ class TupleRunConfig:
     timeout_seconds: float
     retries: int
     retry_backoff_seconds: float
+    # commands/refine defaults to the session's full max_frames_per_run budget
+    # (2000) across every candidate video in the frontier - real PyAV decode +
+    # SigLIP2 embedding at that scale can take minutes per session. Cap it for
+    # benchmark turnaround; None keeps the server's own default.
+    adaptive_max_frames: int | None = None
+    # Caps the size of whichever ranked list each adaptive stage produces -
+    # independent of --adaptive-top-k (the raw per-variant retrieval cap).
+    # adaptive_full: hyperparameters.ranking.top_k (server default 20), how
+    # many TupleResults GET .../tuples returns. adaptive_coarse: the `limit`
+    # query param on GET .../video-priorities (server default 100, max 1000).
+    # Raise this if you want e.g. Recall@50 to mean anything. None keeps
+    # the server's own default.
+    adaptive_ranking_top_k: int | None = None
 
 
 def source_fingerprint(source_path: Path) -> tuple[str, int]:
@@ -98,6 +111,12 @@ def _build_event_payload(group: VideoQueryGroup) -> list[dict[str, Any]]:
         {"event_id": event_id, "original_query": text, "anchor_query": text}
         for event_id, text in group.events
     ]
+
+
+def _adaptive_hyperparameters(config: TupleRunConfig) -> dict[str, Any] | None:
+    if config.adaptive_ranking_top_k is None:
+        return None
+    return {"ranking": {"top_k": config.adaptive_ranking_top_k}}
 
 
 def _legacy_event_timestamps(
@@ -185,7 +204,7 @@ def _run_adaptive_coarse(
 ) -> dict[str, Any]:
     session_id = backend.create_adaptive_session(_build_event_payload(group))
     backend.retrieve(session_id, top_k=config.adaptive_top_k)
-    priorities = backend.get_video_priorities(session_id)
+    priorities = backend.get_video_priorities(session_id, limit=config.adaptive_ranking_top_k)
     rank = _rank_of_video(priorities, "video_id", group.video_id)
     return {
         "status": "ok",
@@ -199,9 +218,13 @@ def _run_adaptive_coarse(
 def _run_adaptive_full(
     backend: TemporalSearchBackendClient, group: VideoQueryGroup, config: TupleRunConfig
 ) -> dict[str, Any]:
-    session_id = backend.create_adaptive_session(_build_event_payload(group))
+    session_id = backend.create_adaptive_session(
+        _build_event_payload(group), hyperparameters=_adaptive_hyperparameters(config)
+    )
     revision = backend.retrieve(session_id, top_k=config.adaptive_top_k)
-    outcome = backend.refine(session_id, expected_revision=revision)
+    outcome = backend.refine(
+        session_id, expected_revision=revision, max_frames=config.adaptive_max_frames
+    )
     if not outcome.available:
         return {
             "status": "unavailable",

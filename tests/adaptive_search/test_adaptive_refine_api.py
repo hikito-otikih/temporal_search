@@ -37,6 +37,11 @@ class FakeFrameProvider:
     def get_frames(self, video_id, pts_ms):
         return [self._frame(video_id, int(pts)) for pts in pts_ms]
 
+    def plan_interval(self, start_pts_ms, end_pts_ms, interval_ms, *, max_frames):
+        count = min(max_frames, 4)
+        points = np.linspace(start_pts_ms, end_pts_ms, count, dtype=int)
+        return [int(pts) for pts in points]
+
     def sample_interval(
         self,
         video_id,
@@ -46,9 +51,10 @@ class FakeFrameProvider:
         *,
         max_frames,
     ):
-        count = min(max_frames, 4)
-        points = np.linspace(start_pts_ms, end_pts_ms, count, dtype=int)
-        return [self._frame(video_id, int(pts)) for pts in points]
+        targets = self.plan_interval(
+            start_pts_ms, end_pts_ms, interval_ms, max_frames=max_frames
+        )
+        return self.get_frames(video_id, targets)
 
     @staticmethod
     def _frame(video_id, pts_ms):
@@ -73,15 +79,7 @@ class NoPixelFrameProvider(FakeFrameProvider):
 
 
 class FailingFrameProvider(FakeFrameProvider):
-    def sample_interval(
-        self,
-        video_id,
-        start_pts_ms,
-        end_pts_ms,
-        interval_ms,
-        *,
-        max_frames,
-    ):
+    def get_frames(self, video_id, pts_ms):
         raise FrameDecodeError("corrupt video stream")
 
 

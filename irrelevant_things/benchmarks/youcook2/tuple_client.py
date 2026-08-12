@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
@@ -176,8 +177,13 @@ class TemporalSearchBackendClient:
             raise BackendApiError(f"POST .../commands/retrieve returned HTTP {status}: {body}")
         return int(body["session_revision"])
 
-    def get_video_priorities(self, session_id: str) -> list[Mapping[str, Any]]:
-        status, body = self._request("GET", f"/v1/search-sessions/{session_id}/video-priorities")
+    def get_video_priorities(
+        self, session_id: str, *, limit: int | None = None
+    ) -> list[Mapping[str, Any]]:
+        path = f"/v1/search-sessions/{session_id}/video-priorities"
+        if limit is not None:
+            path += f"?{urllib.parse.urlencode({'limit': limit})}"
+        status, body = self._request("GET", path)
         if status != 200 or not isinstance(body, Mapping):
             raise BackendApiError(f"GET .../video-priorities returned HTTP {status}: {body}")
         items = body.get("items")
@@ -185,16 +191,23 @@ class TemporalSearchBackendClient:
             raise BackendApiError(".../video-priorities response is missing an items list")
         return items
 
-    def refine(self, session_id: str, *, expected_revision: int) -> RefineOutcome:
+    def refine(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        max_frames: int | None = None,
+    ) -> RefineOutcome:
+        payload: dict[str, Any] = {"expected_revision": expected_revision}
+        if max_frames is not None:
+            payload["max_frames"] = max_frames
         status, body = self._request(
-            "POST",
-            f"/v1/search-sessions/{session_id}/commands/refine",
-            {"expected_revision": expected_revision},
+            "POST", f"/v1/search-sessions/{session_id}/commands/refine", payload
         )
-        if status in (503, 422) and isinstance(body, Mapping):
+        if status == 503 and isinstance(body, Mapping):
             detail = body.get("detail")
             code = detail.get("code") if isinstance(detail, Mapping) else None
-            if isinstance(code, str) and code.startswith("live_refinement_"):
+            if code == "live_refinement_unavailable":
                 message = detail.get("message") if isinstance(detail, Mapping) else None
                 return RefineOutcome(available=False, unavailable_reason=str(message or code))
         if status != 200 or not isinstance(body, Mapping):

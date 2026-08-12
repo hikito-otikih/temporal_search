@@ -8,7 +8,9 @@ orchestration testable offline.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from bisect import bisect_left
+from collections import defaultdict
+from dataclasses import dataclass, replace as _dataclass_replace
 from math import ceil
 from time import perf_counter
 from typing import Iterable
@@ -38,6 +40,12 @@ from .session import SearchRun, SessionBundle
 
 MetricValue = int | float | str | bool | None
 
+# Nearest-frame decoding rarely lands exactly on a region boundary timestamp
+# (video frames sit on the stream's own ~33ms/40ms grid, not on the second).
+# A frame within this tolerance of the boundary is real, in-region data that
+# just snapped a few ms past the edge; clamp it in rather than discarding it.
+_BOUNDARY_SNAP_TOLERANCE_MS = 100
+
 
 @dataclass(frozen=True)
 class LiveRefinementCapabilities:
@@ -65,6 +73,33 @@ class LiveRefinementResult:
 class _SampleStats:
     duplicate_frames: int = 0
     out_of_region_frames: int = 0
+
+
+@dataclass(frozen=True)
+class _RegionOutcome:
+    """One region's contribution to a video-group refinement pass."""
+
+    samples: list[FrameScoreSample]
+    medium_frame_count: int
+    dense_frame_count: int
+    duplicate_frames: int
+    out_of_region_frames: int
+    used_fallback: bool
+    failed_reason: str | None
+
+
+@dataclass(frozen=True)
+class _VideoGroupResult:
+    regions: dict[str, _RegionOutcome]
+    sampling_ms: float
+    embedding_ms: float
+
+
+@dataclass
+class _PlannedRegion:
+    region: TemporalRegion
+    dense_budget: int
+    medium_targets: list[int]
 
 
 class LiveRefinementOrchestrator:
@@ -202,103 +237,69 @@ class LiveRefinementOrchestrator:
             parameters.dense_radius_seconds, "dense_radius_seconds"
         )
 
+        video_groups: dict[str, list[tuple[TemporalRegion, int]]] = defaultdict(list)
+        for region, region_budget in zip(regions, region_budgets):
+            video_groups[region.video_id].append((region, region_budget))
+
         samples: list[FrameScoreSample] = []
         sampling_ms = embedding_ms = 0.0
         medium_frames = dense_frames = 0
         duplicate_frames = out_of_region_frames = 0
         fallback_state_queries = 0
+        refined_region_ids: list[str] = []
+        failed_region_ids: list[str] = []
+        last_failure_reason: str | None = None
 
-        for region, region_budget in zip(regions, region_budgets):
-            event = event_by_id[region.event_id]
-            pre_query, post_query, used_fallback = _state_queries(event)
-            fallback_state_queries += int(used_fallback)
-            dense_budget = _dense_budget(
-                region, region_budget, dense_interval_ms, dense_radius_ms
-            )
-            medium_budget = region_budget - dense_budget
-
-            started = perf_counter()
-            medium, stats = self._sample_region(
-                region, interval_ms=medium_interval_ms, max_frames=medium_budget
-            )
-            sampling_ms += (perf_counter() - started) * 1000.0
-            duplicate_frames += stats.duplicate_frames
-            out_of_region_frames += stats.out_of_region_frames
-            if not medium:
-                raise LiveRefinementDataError(
-                    f"provider returned no encodable frame for region {region.id}"
-                )
-
-            started = perf_counter()
-            medium_curves = _score_frames(
-                self.embedder,
-                anchor_query=event.anchor_query,
-                pre_state_query=pre_query,
-                post_state_query=post_query,
-                images=[frame.image for frame in medium],
-                image_batch_size=parameters.embedding_batch_size,
-            )
-            embedding_ms += (perf_counter() - started) * 1000.0
-            medium_frames += len(medium)
-            region_samples = _build_samples(
+        # Grouped by video (not processed one region at a time) so every
+        # region of a video shares one decode pass and one embedding batch
+        # per event instead of paying its own container-open and GPU call.
+        #
+        # Measured, did not keep: running these groups on a thread pool
+        # (PyAV decode releases the GIL, so this looked like a free win)
+        # made a 6-video/48-region session ~2.3x *slower* in this
+        # environment (18.7s -> ~44s), reproduced twice. PyAV's own
+        # thread_type="AUTO" already parallelizes decode inside one
+        # container with native threads; running several containers
+        # concurrently multiplies that against 16 CPU cores and, combined
+        # with concurrent reads off the WSL-mounted Windows video
+        # directory, thrashes instead of overlapping. Sequential per-video
+        # processing measured faster - see the timing harness this was
+        # verified with.
+        for video_id in sorted(video_groups):
+            group_result = self._refine_video_group(
                 session_id,
-                region,
-                medium,
-                medium_curves.anchor,
-                medium_curves.pre,
-                medium_curves.post,
+                video_id,
+                video_groups[video_id],
+                event_by_id,
+                medium_interval_ms=medium_interval_ms,
+                dense_interval_ms=dense_interval_ms,
+                dense_radius_ms=dense_radius_ms,
+                embedding_batch_size=parameters.embedding_batch_size,
             )
+            sampling_ms += group_result.sampling_ms
+            embedding_ms += group_result.embedding_ms
+            for region, _ in video_groups[video_id]:
+                outcome = group_result.regions[region.id]
+                if outcome.failed_reason is not None:
+                    # One region's (or one video's) frame data being unusable
+                    # should not discard every other region's already-decoded
+                    # work - same isolation guarantee as before, just decided
+                    # per video-group instead of per single decode call.
+                    failed_region_ids.append(region.id)
+                    last_failure_reason = outcome.failed_reason
+                    continue
+                refined_region_ids.append(region.id)
+                medium_frames += outcome.medium_frame_count
+                dense_frames += outcome.dense_frame_count
+                duplicate_frames += outcome.duplicate_frames
+                out_of_region_frames += outcome.out_of_region_frames
+                fallback_state_queries += int(outcome.used_fallback)
+                samples.extend(outcome.samples)
 
-            if dense_budget:
-                peak_index = max(
-                    range(len(medium)),
-                    key=lambda index: (medium_curves.anchor[index], -index),
-                )
-                peak_pts_ms = medium[peak_index].pts_ms
-                dense_start = max(
-                    _region_start_ms(region), peak_pts_ms - dense_radius_ms
-                )
-                dense_end = min(_region_end_ms(region), peak_pts_ms + dense_radius_ms)
-                started = perf_counter()
-                dense, stats = self._sample_region(
-                    region,
-                    interval_ms=dense_interval_ms,
-                    max_frames=dense_budget,
-                    start_pts_ms=dense_start,
-                    end_pts_ms=dense_end,
-                )
-                sampling_ms += (perf_counter() - started) * 1000.0
-                duplicate_frames += stats.duplicate_frames
-                out_of_region_frames += stats.out_of_region_frames
-                medium_pts = {frame.pts_ms for frame in medium}
-                unique_dense = [
-                    frame for frame in dense if frame.pts_ms not in medium_pts
-                ]
-                duplicate_frames += len(dense) - len(unique_dense)
-                if unique_dense:
-                    started = perf_counter()
-                    dense_curves = _score_frames(
-                        self.embedder,
-                        anchor_query=event.anchor_query,
-                        pre_state_query=pre_query,
-                        post_state_query=post_query,
-                        images=[frame.image for frame in unique_dense],
-                        image_batch_size=parameters.embedding_batch_size,
-                    )
-                    embedding_ms += (perf_counter() - started) * 1000.0
-                    dense_frames += len(unique_dense)
-                    region_samples.extend(
-                        _build_samples(
-                            session_id,
-                            region,
-                            unique_dense,
-                            dense_curves.anchor,
-                            dense_curves.pre,
-                            dense_curves.post,
-                        )
-                    )
-            samples.extend(
-                sorted(region_samples, key=lambda item: item.timestamp_seconds)
+        if not refined_region_ids:
+            detail = f"; last error: {last_failure_reason}" if last_failure_reason else ""
+            raise LiveRefinementDataError(
+                f"live refinement failed for all {len(regions)} selected regions{detail}"
             )
 
         if len(samples) > selected_budget:
@@ -313,7 +314,8 @@ class LiveRefinementOrchestrator:
             "refinement_model_dimension": runtime_spec.dimension,
             "refinement_preprocess": runtime_spec.preprocess,
             "regions_requested": len(regions),
-            "regions_refined": len(regions),
+            "regions_refined": len(refined_region_ids),
+            "regions_failed": len(failed_region_ids),
             "frame_budget": selected_budget,
             "embedding_batch_size": parameters.embedding_batch_size,
             "frames_sampled": len(samples),
@@ -331,7 +333,7 @@ class LiveRefinementOrchestrator:
         bundle, run = self.service.replace_frame_scores(
             session_id,
             expected_revision=expected_revision,
-            region_ids=[region.id for region in regions],
+            region_ids=refined_region_ids,
             samples=samples,
             run_metrics=run_metrics,
         )
@@ -344,51 +346,320 @@ class LiveRefinementOrchestrator:
         }
         return LiveRefinementResult(bundle=bundle, run=run, metrics=result_metrics)
 
-    def _sample_region(
+    def _refine_video_group(
         self,
-        region: TemporalRegion,
+        session_id: str,
+        video_id: str,
+        region_budgets: list[tuple[TemporalRegion, int]],
+        event_by_id: dict[str, EventDefinition],
         *,
-        interval_ms: int,
-        max_frames: int,
-        start_pts_ms: int | None = None,
-        end_pts_ms: int | None = None,
-    ) -> tuple[list[FrameReference], _SampleStats]:
-        if max_frames <= 0:
-            return [], _SampleStats()
-        start = _region_start_ms(region) if start_pts_ms is None else start_pts_ms
-        end = _region_end_ms(region) if end_pts_ms is None else end_pts_ms
+        medium_interval_ms: int,
+        dense_interval_ms: int,
+        dense_radius_ms: int,
+        embedding_batch_size: int,
+    ) -> _VideoGroupResult:
+        """Batch decode and score every region of one video together.
+
+        One container-open per phase (medium, then dense) covers every
+        region of this video instead of one per region, and one embedding
+        call per (event, phase) covers every region of that event instead of
+        one per region. The per-region science - bounds, budgets, boundary
+        clamping, the dense peak search - is unchanged; only how many decode
+        and GPU calls it takes to get there changes.
+        """
+
+        provider = self.service.frame_provider
+        outcomes: dict[str, _RegionOutcome] = {}
+        sampling_ms = embedding_ms = 0.0
+
+        planned: dict[str, _PlannedRegion] = {}
+        for region, region_budget in region_budgets:
+            dense_budget = _dense_budget(
+                region, region_budget, dense_interval_ms, dense_radius_ms
+            )
+            medium_budget = region_budget - dense_budget
+            targets = (
+                provider.plan_interval(
+                    _region_start_ms(region),
+                    _region_end_ms(region),
+                    medium_interval_ms,
+                    max_frames=medium_budget,
+                )
+                if medium_budget > 0
+                else []
+            )
+            planned[region.id] = _PlannedRegion(
+                region=region, dense_budget=dense_budget, medium_targets=targets
+            )
+
+        union_medium = sorted({pts for plan in planned.values() for pts in plan.medium_targets})
+        started = perf_counter()
         try:
-            frames = self.service.frame_provider.sample_interval(
-                region.video_id,
-                start,
-                end,
-                interval_ms,
-                max_frames=max_frames,
-            )
+            medium_pool = provider.get_frames(video_id, union_medium) if union_medium else []
         except FrameProviderError as exc:
-            raise LiveRefinementDataError(
-                f"frame provider failed for region {region.id}: {exc}"
-            ) from exc
-        if len(frames) > max_frames:
-            raise LiveRefinementDataError(
-                f"frame provider exceeded max_frames for region {region.id}"
+            sampling_ms += (perf_counter() - started) * 1000.0
+            reason = f"frame provider failed for video {video_id}: {exc}"
+            return _VideoGroupResult(
+                regions={
+                    region_id: _failed_outcome(reason) for region_id in planned
+                },
+                sampling_ms=sampling_ms,
+                embedding_ms=0.0,
             )
-        unique: dict[int, FrameReference] = {}
-        out_of_region = 0
-        for frame in frames:
-            _validate_frame(frame, region)
-            if (
-                frame.pts_ms < _region_start_ms(region)
-                or frame.pts_ms > _region_end_ms(region)
-            ):
+        sampling_ms += (perf_counter() - started) * 1000.0
+
+        region_medium: dict[str, tuple[list[FrameReference], _SampleStats]] = {}
+        medium_by_event: dict[str, list[str]] = defaultdict(list)
+        for region_id, plan in planned.items():
+            if not plan.medium_targets:
+                outcomes[region_id] = _failed_outcome(
+                    f"provider returned no encodable frame for region {plan.region.id}"
+                )
+                continue
+            extracted, stats = _extract_region_frames(
+                medium_pool, plan.region, plan.medium_targets
+            )
+            if not extracted:
+                outcomes[region_id] = _failed_outcome(
+                    f"provider returned no encodable frame for region {plan.region.id}",
+                    duplicate_frames=stats.duplicate_frames,
+                    out_of_region_frames=stats.out_of_region_frames,
+                )
+                continue
+            region_medium[region_id] = (extracted, stats)
+            medium_by_event[plan.region.event_id].append(region_id)
+
+        region_samples: dict[str, list[FrameScoreSample]] = defaultdict(list)
+        region_medium_curves: dict[str, SimilarityCurves] = {}
+        embedding_ms += self._score_grouped(
+            session_id,
+            medium_by_event,
+            planned,
+            region_medium,
+            event_by_id,
+            embedding_batch_size,
+            region_samples,
+            region_medium_curves,
+        )
+
+        dense_targets: dict[str, list[int]] = {}
+        for region_id, (frames, _stats) in region_medium.items():
+            plan = planned[region_id]
+            if not plan.dense_budget:
+                continue
+            curve = region_medium_curves[region_id]
+            peak_index = max(
+                range(len(frames)), key=lambda index: (curve.anchor[index], -index)
+            )
+            peak_pts_ms = frames[peak_index].pts_ms
+            region = plan.region
+            dense_start = max(_region_start_ms(region), peak_pts_ms - dense_radius_ms)
+            dense_end = min(_region_end_ms(region), peak_pts_ms + dense_radius_ms)
+            dense_targets[region_id] = provider.plan_interval(
+                dense_start, dense_end, dense_interval_ms, max_frames=plan.dense_budget
+            )
+
+        union_dense = sorted({pts for targets in dense_targets.values() for pts in targets})
+        dense_pool: list[FrameReference] = []
+        if union_dense:
+            started = perf_counter()
+            try:
+                dense_pool = provider.get_frames(video_id, union_dense)
+            except FrameProviderError as exc:
+                sampling_ms += (perf_counter() - started) * 1000.0
+                # Dense sampling failing for a region discards that region's
+                # medium work too, matching the pre-batching behavior where a
+                # dense decode failure raised before any samples were built.
+                reason = f"frame provider failed for video {video_id}: {exc}"
+                for region_id in dense_targets:
+                    outcomes[region_id] = _failed_outcome(reason)
+                dense_targets = {}
+            else:
+                sampling_ms += (perf_counter() - started) * 1000.0
+
+        region_dense: dict[str, tuple[list[FrameReference], _SampleStats]] = {}
+        region_extra_duplicates: dict[str, int] = defaultdict(int)
+        dense_by_event: dict[str, list[str]] = defaultdict(list)
+        for region_id, targets in dense_targets.items():
+            if region_id in outcomes or not targets:
+                continue
+            region = planned[region_id].region
+            extracted, stats = _extract_region_frames(dense_pool, region, targets)
+            region_extra_duplicates[region_id] += stats.duplicate_frames
+            medium_pts = {frame.pts_ms for frame in region_medium[region_id][0]}
+            unique_dense = [frame for frame in extracted if frame.pts_ms not in medium_pts]
+            region_extra_duplicates[region_id] += len(extracted) - len(unique_dense)
+            if not unique_dense:
+                continue
+            region_dense[region_id] = (unique_dense, stats)
+            dense_by_event[region.event_id].append(region_id)
+
+        dense_frame_counts: dict[str, int] = defaultdict(int)
+        embedding_ms += self._score_grouped(
+            session_id,
+            dense_by_event,
+            planned,
+            region_dense,
+            event_by_id,
+            embedding_batch_size,
+            region_samples,
+            None,
+            frame_counts=dense_frame_counts,
+        )
+
+        for region_id, plan in planned.items():
+            if region_id in outcomes:
+                continue
+            frames, medium_stats = region_medium[region_id]
+            _, dense_stats = region_dense.get(region_id, ([], _SampleStats()))
+            _, _, used_fallback = _state_queries(event_by_id[plan.region.event_id])
+            outcomes[region_id] = _RegionOutcome(
+                samples=sorted(
+                    region_samples[region_id], key=lambda item: item.timestamp_seconds
+                ),
+                medium_frame_count=len(frames),
+                dense_frame_count=dense_frame_counts.get(region_id, 0),
+                duplicate_frames=(
+                    medium_stats.duplicate_frames
+                    + region_extra_duplicates.get(region_id, 0)
+                ),
+                out_of_region_frames=(
+                    medium_stats.out_of_region_frames + dense_stats.out_of_region_frames
+                ),
+                used_fallback=used_fallback,
+                failed_reason=None,
+            )
+
+        return _VideoGroupResult(
+            regions=outcomes, sampling_ms=sampling_ms, embedding_ms=embedding_ms
+        )
+
+    def _score_grouped(
+        self,
+        session_id: str,
+        region_ids_by_event: dict[str, list[str]],
+        planned: dict[str, _PlannedRegion],
+        region_frames: dict[str, tuple[list[FrameReference], _SampleStats]],
+        event_by_id: dict[str, EventDefinition],
+        embedding_batch_size: int,
+        region_samples: dict[str, list[FrameScoreSample]],
+        region_curves_out: dict[str, SimilarityCurves] | None,
+        *,
+        frame_counts: dict[str, int] | None = None,
+    ) -> float:
+        """Score every region of one event together in a single embed call."""
+
+        total_embedding_ms = 0.0
+        for event_id, region_ids in region_ids_by_event.items():
+            event = event_by_id[event_id]
+            pre_query, post_query, _ = _state_queries(event)
+            images: list[object] = []
+            offsets: dict[str, tuple[int, int]] = {}
+            for region_id in region_ids:
+                frames, _stats = region_frames[region_id]
+                start = len(images)
+                images.extend(frame.image for frame in frames)
+                offsets[region_id] = (start, len(images))
+            started = perf_counter()
+            curves = _score_frames(
+                self.embedder,
+                anchor_query=event.anchor_query,
+                pre_state_query=pre_query,
+                post_state_query=post_query,
+                images=images,
+                image_batch_size=embedding_batch_size,
+            )
+            total_embedding_ms += (perf_counter() - started) * 1000.0
+            for region_id in region_ids:
+                frames, _stats = region_frames[region_id]
+                start, end = offsets[region_id]
+                curve = SimilarityCurves(
+                    anchor=curves.anchor[start:end],
+                    pre=curves.pre[start:end],
+                    post=curves.post[start:end],
+                )
+                if region_curves_out is not None:
+                    region_curves_out[region_id] = curve
+                region = planned[region_id].region
+                region_samples[region_id].extend(
+                    _build_samples(
+                        session_id, region, frames, curve.anchor, curve.pre, curve.post
+                    )
+                )
+                if frame_counts is not None:
+                    frame_counts[region_id] += len(frames)
+        return total_embedding_ms
+
+
+def _failed_outcome(
+    reason: str, *, duplicate_frames: int = 0, out_of_region_frames: int = 0
+) -> _RegionOutcome:
+    return _RegionOutcome(
+        samples=[],
+        medium_frame_count=0,
+        dense_frame_count=0,
+        duplicate_frames=duplicate_frames,
+        out_of_region_frames=out_of_region_frames,
+        used_fallback=False,
+        failed_reason=reason,
+    )
+
+
+def _nearest_pts(sorted_pts: list[int], target_ms: int) -> int:
+    """Return the pool timestamp closest to ``target_ms`` (ties -> earlier)."""
+
+    index = bisect_left(sorted_pts, target_ms)
+    if index == 0:
+        return sorted_pts[0]
+    if index == len(sorted_pts):
+        return sorted_pts[-1]
+    before, after = sorted_pts[index - 1], sorted_pts[index]
+    return before if target_ms - before <= after - target_ms else after
+
+
+def _extract_region_frames(
+    pool: list[FrameReference], region: TemporalRegion, targets: list[int]
+) -> tuple[list[FrameReference], _SampleStats]:
+    """Recover one region's own frames from a video-wide decoded pool.
+
+    ``pool`` may hold frames decoded for every region of a video in one
+    batch call. ``targets`` is this region's own requested grid (from
+    ``plan_interval``); each target was part of the union that produced
+    ``pool``, so the pool timestamp nearest to a target is exactly what a
+    solo decode for this region alone would have produced - looking targets
+    up this way (instead of taking whatever falls inside the region's time
+    window) keeps a region from silently absorbing a neighboring region's
+    frames and exceeding its own budget.
+    """
+
+    if not pool or not targets:
+        return [], _SampleStats()
+    sorted_pts = sorted(frame.pts_ms for frame in pool)
+    by_pts = {frame.pts_ms: frame for frame in pool}
+    region_start = _region_start_ms(region)
+    region_end = _region_end_ms(region)
+    unique: dict[int, FrameReference] = {}
+    out_of_region = 0
+    for target_ms in targets:
+        frame = by_pts[_nearest_pts(sorted_pts, target_ms)]
+        _validate_frame(frame, region)
+        pts_ms = frame.pts_ms
+        if pts_ms < region_start or pts_ms > region_end:
+            snapped_ms = min(max(pts_ms, region_start), region_end)
+            if abs(pts_ms - snapped_ms) > _BOUNDARY_SNAP_TOLERANCE_MS:
                 out_of_region += 1
                 continue
-            unique.setdefault(frame.pts_ms, frame)
-        ordered = [unique[pts] for pts in sorted(unique)]
-        return ordered, _SampleStats(
-            duplicate_frames=len(frames) - out_of_region - len(ordered),
-            out_of_region_frames=out_of_region,
-        )
+            # Nearest-frame decoding snapped just past the boundary because
+            # no real frame lands exactly on it; clamp it back in rather
+            # than discarding genuine in-region data.
+            frame = _dataclass_replace(frame, pts_ms=snapped_ms)
+            pts_ms = snapped_ms
+        unique.setdefault(pts_ms, frame)
+    ordered = [unique[pts] for pts in sorted(unique)]
+    return ordered, _SampleStats(
+        duplicate_frames=len(targets) - out_of_region - len(ordered),
+        out_of_region_frames=out_of_region,
+    )
 
 
 def _select_regions(

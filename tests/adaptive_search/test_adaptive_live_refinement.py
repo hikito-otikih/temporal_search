@@ -15,8 +15,12 @@ from adaptive_search.providers import (
     UnavailableFrameProvider,
 )
 from adaptive_search.refinement import (
+    LiveRefinementDataError,
     LiveRefinementOrchestrator,
     LiveRefinementUnavailableError,
+    _extract_region_frames,
+    _region_end_ms,
+    _region_start_ms,
 )
 from adaptive_search.service import AdaptiveSearchService
 
@@ -45,6 +49,10 @@ class FakeFrameProvider:
     def get_frames(self, video_id, pts_ms):
         return [self._frame(video_id, pts) for pts in pts_ms]
 
+    def plan_interval(self, start_pts_ms, end_pts_ms, interval_ms, *, max_frames):
+        self.calls.append((start_pts_ms, end_pts_ms, interval_ms, max_frames))
+        return _nominal_points(start_pts_ms, end_pts_ms, interval_ms, max_frames)
+
     def sample_interval(
         self,
         video_id,
@@ -54,13 +62,10 @@ class FakeFrameProvider:
         *,
         max_frames,
     ):
-        self.calls.append(
-            (video_id, start_pts_ms, end_pts_ms, interval_ms, max_frames)
+        targets = self.plan_interval(
+            start_pts_ms, end_pts_ms, interval_ms, max_frames=max_frames
         )
-        points = _nominal_points(
-            start_pts_ms, end_pts_ms, interval_ms, max_frames
-        )
-        return [self._frame(video_id, pts) for pts in points]
+        return self.get_frames(video_id, targets)
 
     @staticmethod
     def _frame(video_id, pts_ms):
@@ -111,7 +116,7 @@ def configured_parameters(max_frames=24):
     return SearchHyperparameters.model_validate(payload)
 
 
-def seed_one_region(service, *, max_frames=24):
+def seed_one_region(service, *, max_frames=24, timestamp_seconds=3.0):
     bundle = service.create_session(
         events=[event()],
         hyperparameters=configured_parameters(max_frames),
@@ -122,7 +127,7 @@ def seed_one_region(service, *, max_frames=24):
         event_id="e1",
         video_id="video-a",
         frame_id=75,
-        timestamp_seconds=3.0,
+        timestamp_seconds=timestamp_seconds,
         raw_relevance_score=0.9,
         query_variant="anchor-en-0",
     )
@@ -133,6 +138,54 @@ def seed_one_region(service, *, max_frames=24):
         candidates=[candidate],
     )
     return bundle
+
+
+class BoundaryOvershootFrameProvider(FakeFrameProvider):
+    """Mimics nearest-frame decoding snapping a few ms past a boundary.
+
+    Real video frames rarely land exactly on a region's start/end timestamp
+    (they sit on the container's own frame grid), so the decoder's "nearest"
+    frame is often a handful of ms outside the requested window.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._starts: set[int] = set()
+        self._ends: set[int] = set()
+
+    def plan_interval(self, start_pts_ms, end_pts_ms, interval_ms, *, max_frames):
+        self._starts.add(start_pts_ms)
+        self._ends.add(end_pts_ms)
+        return super().plan_interval(
+            start_pts_ms, end_pts_ms, interval_ms, max_frames=max_frames
+        )
+
+    def get_frames(self, video_id, pts_ms):
+        shifted = [
+            pts - 5 if pts in self._starts
+            else pts + 5 if pts in self._ends
+            else pts
+            for pts in pts_ms
+        ]
+        return [self._frame(video_id, pts) for pts in shifted]
+
+
+class AlwaysEmptyFrameProvider(FakeFrameProvider):
+    """Simulates a region whose video/timestamps yield no decodable frame."""
+
+    def get_frames(self, video_id, pts_ms):
+        return []
+
+
+class PartiallyFailingFrameProvider(FakeFrameProvider):
+    def __init__(self, failing_video_id):
+        super().__init__()
+        self.failing_video_id = failing_video_id
+
+    def get_frames(self, video_id, pts_ms):
+        if video_id == self.failing_video_id:
+            return []
+        return super().get_frames(video_id, pts_ms)
 
 
 class AdaptiveLiveRefinementTests(unittest.TestCase):
@@ -159,7 +212,7 @@ class AdaptiveLiveRefinementTests(unittest.TestCase):
         )
         expected_pts = {
             frame_pts
-            for _, start, end, interval, limit in provider.calls
+            for start, end, interval, limit in provider.calls
             for frame_pts in _nominal_points(start, end, interval, limit)
         }
         self.assertTrue(
@@ -264,6 +317,111 @@ class AdaptiveLiveRefinementTests(unittest.TestCase):
                 bundle.session.id, expected_revision=0
             )
         self.assertEqual(provider.calls, [])
+
+    def test_extract_region_frames_clamps_a_frame_that_overshoots_the_boundary_slightly(self):
+        service = AdaptiveSearchService(frame_provider=FakeFrameProvider())
+        bundle = seed_one_region(service, max_frames=24, timestamp_seconds=60.0)
+        region = bundle.artifacts.regions[0]
+        start_ms, end_ms = _region_start_ms(region), _region_end_ms(region)
+        targets = [start_ms, end_ms]
+        pool = [
+            FakeFrameProvider._frame(region.video_id, start_ms - 5),
+            FakeFrameProvider._frame(region.video_id, end_ms + 5),
+        ]
+
+        frames, stats = _extract_region_frames(pool, region, targets)
+
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(stats.out_of_region_frames, 0)
+        self.assertTrue(all(start_ms <= frame.pts_ms <= end_ms for frame in frames))
+
+    def test_extract_region_frames_still_drops_frames_far_outside_the_boundary(self):
+        service = AdaptiveSearchService(frame_provider=FakeFrameProvider())
+        bundle = seed_one_region(service, max_frames=24, timestamp_seconds=60.0)
+        region = bundle.artifacts.regions[0]
+        start_ms = _region_start_ms(region)
+        targets = [start_ms]
+        pool = [FakeFrameProvider._frame(region.video_id, start_ms - 5000)]
+
+        frames, stats = _extract_region_frames(pool, region, targets)
+
+        self.assertEqual(frames, [])
+        self.assertEqual(stats.out_of_region_frames, 1)
+
+    def test_a_regions_bad_frame_data_does_not_abort_the_rest_of_the_frontier(self):
+        provider = PartiallyFailingFrameProvider(failing_video_id="video-b")
+        service = AdaptiveSearchService(frame_provider=provider)
+        bundle = service.create_session(
+            events=[event("e1"), event("e2")],
+            hyperparameters=configured_parameters(max_frames=10),
+        )
+        candidates = [
+            SparseCandidate(
+                id="c1",
+                session_id=bundle.session.id,
+                event_id="e1",
+                video_id="video-a",
+                frame_id=100,
+                timestamp_seconds=4.0,
+                raw_relevance_score=0.9,
+                query_variant="anchor-en-0",
+            ),
+            SparseCandidate(
+                id="c2",
+                session_id=bundle.session.id,
+                event_id="e2",
+                video_id="video-b",
+                frame_id=200,
+                timestamp_seconds=8.0,
+                raw_relevance_score=0.9,
+                query_variant="anchor-en-0",
+            ),
+        ]
+        bundle, _ = service.replace_candidates(
+            bundle.session.id,
+            expected_revision=0,
+            event_ids=["e1", "e2"],
+            candidates=candidates,
+        )
+
+        result = LiveRefinementOrchestrator(
+            service, FakeEmbedder()
+        ).refine_session(
+            bundle.session.id,
+            expected_revision=0,
+            region_ids=[region.id for region in bundle.artifacts.regions],
+            max_frames=10,
+        )
+
+        good_region = next(
+            r for r in bundle.artifacts.regions if r.video_id == "video-a"
+        )
+        bad_region = next(
+            r for r in bundle.artifacts.regions if r.video_id == "video-b"
+        )
+        refined_region_ids = {
+            sample.region_id for sample in result.bundle.artifacts.frame_scores
+        }
+        self.assertIn(good_region.id, refined_region_ids)
+        self.assertNotIn(bad_region.id, refined_region_ids)
+        self.assertEqual(result.metrics["regions_refined"], 1)
+        self.assertEqual(result.metrics["regions_failed"], 1)
+
+    def test_refine_raises_when_every_selected_region_fails(self):
+        provider = AlwaysEmptyFrameProvider()
+        service = AdaptiveSearchService(frame_provider=provider)
+        bundle = seed_one_region(service, max_frames=24)
+        region = bundle.artifacts.regions[0]
+
+        with self.assertRaisesRegex(
+            LiveRefinementDataError, "failed for all 1 selected regions"
+        ):
+            LiveRefinementOrchestrator(service, FakeEmbedder()).refine_session(
+                bundle.session.id,
+                expected_revision=0,
+                region_ids=[region.id],
+                max_frames=24,
+            )
 
 
 def _nominal_points(start, end, interval, limit):

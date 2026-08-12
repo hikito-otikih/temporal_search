@@ -154,6 +154,28 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     tuple_run.add_argument("--gamma", type=float, default=defaults.get("gamma", 0.05))
     tuple_run.add_argument("--adaptive-top-k", type=int, default=defaults.get("adaptive_top_k", 20))
     tuple_run.add_argument(
+        "--adaptive-max-frames",
+        type=int,
+        default=defaults.get("adaptive_max_frames"),
+        help=(
+            "cap commands/refine's frame budget for adaptive_full (server default is "
+            "2000 across the whole frontier - real video decode + GPU embedding at that "
+            "scale can take minutes per session; try 100-400 for benchmark turnaround)"
+        ),
+    )
+    tuple_run.add_argument(
+        "--adaptive-ranking-top-k",
+        type=int,
+        default=defaults.get("adaptive_ranking_top_k"),
+        help=(
+            "cap the size of whichever ranked list the chosen --pipeline produces - "
+            "independent of --adaptive-top-k (the raw per-variant retrieval cap). "
+            "adaptive_full: hyperparameters.ranking.top_k (server default 20). "
+            "adaptive_coarse: the video-priorities page limit (server default 100, "
+            "max 1000). No effect on legacy_temporal/legacy_ambiguous."
+        ),
+    )
+    tuple_run.add_argument(
         "--recall-k", type=_csv_ints, default=_csv_ints(defaults.get("recall_k", "1,5,10,20,50"))
     )
     tuple_run.add_argument("--output-dir", default=defaults.get("output_dir"))
@@ -278,6 +300,8 @@ def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         timeout_seconds=args.timeout,
         retries=args.retries,
         retry_backoff_seconds=args.retry_backoff,
+        adaptive_max_frames=args.adaptive_max_frames,
+        adaptive_ranking_top_k=args.adaptive_ranking_top_k,
     )
     metrics, _ = run_tuple_benchmark(
         groups=groups,

@@ -95,6 +95,15 @@ class FrameProvider(Protocol):
         max_frames: int,
     ) -> list[FrameReference]: ...
 
+    def plan_interval(
+        self,
+        start_pts_ms: int,
+        end_pts_ms: int,
+        interval_ms: int,
+        *,
+        max_frames: int,
+    ) -> list[int]: ...
+
 
 @dataclass(frozen=True)
 class DecodedVideoFrame:
@@ -543,15 +552,21 @@ class YouCook2FrameProvider:
             )
         return references
 
-    def sample_interval(
+    def plan_interval(
         self,
-        video_id: str,
         start_pts_ms: int,
         end_pts_ms: int,
         interval_ms: int,
         *,
         max_frames: int,
-    ) -> list[FrameReference]:
+    ) -> list[int]:
+        """Compute the target PTS grid for an interval without decoding.
+
+        Lets a caller collect several regions' target timestamps (even across
+        different regions of the same video) and pass the union to
+        ``get_frames`` once, instead of paying a container-open per region.
+        """
+
         start = _validate_pts(start_pts_ms, name="start_pts_ms")
         end = _validate_pts(end_pts_ms, name="end_pts_ms")
         interval = _validate_positive_int(interval_ms, name="interval_ms")
@@ -561,7 +576,20 @@ class YouCook2FrameProvider:
                 "end_pts_ms must be greater than or equal to start_pts_ms"
             )
         budget = min(requested_budget, self.max_batch_frames)
-        targets = _budgeted_interval_grid(start, end, interval, budget)
+        return _budgeted_interval_grid(start, end, interval, budget)
+
+    def sample_interval(
+        self,
+        video_id: str,
+        start_pts_ms: int,
+        end_pts_ms: int,
+        interval_ms: int,
+        *,
+        max_frames: int,
+    ) -> list[FrameReference]:
+        targets = self.plan_interval(
+            start_pts_ms, end_pts_ms, interval_ms, max_frames=max_frames
+        )
         return self.get_frames(video_id, targets)
 
     def _require_available(self) -> None:
@@ -603,6 +631,16 @@ class UnavailableFrameProvider:
         *,
         max_frames: int,
     ) -> list[FrameReference]:
+        raise RuntimeError(self._reason)
+
+    def plan_interval(
+        self,
+        start_pts_ms: int,
+        end_pts_ms: int,
+        interval_ms: int,
+        *,
+        max_frames: int,
+    ) -> list[int]:
         raise RuntimeError(self._reason)
 
 
