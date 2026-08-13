@@ -358,13 +358,14 @@ elif step == STEP_LABELS[5]:
     if session_id is None:
         st.warning("Create a session and complete earlier steps first.")
     else:
-        tuples = client.get_tuples(session_id, limit=200).get("items", [])
-        if not tuples:
-            st.info("No tuples. Check that proposals exist and constraints are not overly restrictive.")
-        else:
-            from components.tuple_viewer import render_tuple_list, render_tuple_summary_table
-            render_tuple_summary_table(tuples)
-            render_tuple_list(tuples)
+        st.info(
+            "`GET .../tuples` was retired from the backend (see "
+            "docs/ADAPTIVE_PIPELINE_MIGRATION.md) — tuples are still built internally "
+            "and feed `commands/fix-frame`, but there's no HTTP surface left to list "
+            "their contents here."
+        )
+        tuple_count = response.artifact_counts.tuples if response is not None else 0
+        st.metric("Tuple count", tuple_count)
 
 # ---------------------------------------------------------------------------
 # Step 7: Feedback/recompute

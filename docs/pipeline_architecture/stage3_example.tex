@@ -1,0 +1,29 @@
+Clustering the 353 fused candidates produced \textbf{309} temporal regions
+session-wide. For event $e_1$ (\code{evt0}) in the eventual top-ranked video
+\texttt{M8E0XaX0tR0}, four regions survived clustering/merging:
+
+\begin{center}
+\small
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Span (s) & \code{raw\_coarse\_score} & \code{normalized\_coarse\_score} & \# candidates \\
+\midrule
+$[434,\,448]$ & 0.0645 & \textbf{0.9530} & 3 \\
+$[469,\,475]$ & 0.0110 & 0.3437 & 1 \\
+$[479,\,485]$ & 0.0105 & 0.3366 & 1 \\
+$[509,\,515]$ & 0.0123 & 0.3649 & 1 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The $[434,448]$ region's normalized score (0.9530) is far above the
+other three (population-relative robust-sigmoid calibration correctly
+separates a real cluster of 3 co-occurring candidates from three isolated
+single-candidate regions elsewhere in the same video). This is exactly the
+region Stage 4 will pick as $e_1$'s best-scoring region for this video, and
+whose member candidate becomes Stage 5's refinement seed
+(Section~\ref{sec:stage5-example}: seed timestamp $445.0$s falls inside
+$[434,448]$).
+
+\emph{(Live values, \file{GET .../regions}, region ids
+\code{region\_b4f4f89bd9b1c2d14508} and siblings.)}

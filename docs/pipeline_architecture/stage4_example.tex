@@ -1,0 +1,31 @@
+The top 5 ranked videos (out of every video with at least one surviving
+region), before any refinement is requested:
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\code{video\_id} & \code{event\_coverage} & \code{mean\_best\_event\_score} &
+  \code{min\_best\_event\_score} & \code{priority\_score} \\
+\midrule
+\texttt{M8E0XaX0tR0} & 4/4 & 0.9009 & 0.7985 & \textbf{0.9009} \\
+\texttt{vglhM2iVGSo} & 4/4 & 0.8576 & 0.6838 & 0.8576 \\
+\texttt{65235CscqdQ} & 4/4 & 0.8118 & 0.5089 & 0.8118 \\
+\texttt{ukfCQQpZ0k4} & 4/4 & 0.7661 & 0.5030 & 0.7661 \\
+\texttt{22S\_rhRSWfI} & 4/4 & 0.7478 & 0.4810 & 0.7478 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Confirming Eq.~\ref{eq:priority} exactly at production weights:
+$\code{priority\_score} = \code{mean\_best\_event\_score}$ in every row, with
+\code{min\_best\_event\_score} computed and returned to the client but ---
+at $w_m=0$ --- not folded into the sort key at all. Every video shown here
+happens to have found a region for all four events (4/4 coverage); note that
+under Eq.~\ref{eq:priority}'s zero-fill rule (Section~\ref{sec:stage4}), a
+video with only 3/4 coverage would need a substantially higher score on its
+three found events just to match one of these rows' mean, since its fourth
+slot contributes a hard 0.
+
+\emph{(Live values, \file{GET .../video-priorities?limit=10}, no
+\code{apply\_boundary\_refinement} flag.)}

@@ -17,6 +17,7 @@ When running inside WSL and the configured root is a Windows path
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -84,6 +85,49 @@ class MediaResolver:
         if matches:
             return matches[0]
         return None
+
+    def resolve_keyframe_near(self, video_id: str, seconds: float) -> Path | None:
+        """Resolve the keyframe closest in time to ``seconds``.
+
+        Used for results (e.g. adaptive_coarse video-priorities) that only
+        carry a continuous timestamp, not an exact frame index. Reads the
+        real-fps keyframe manifest at ``<root>/metadata/<video_id>_keyframes.json``
+        (the same file the backend's YouCook2 asset catalog scans) instead of
+        computing frame_index from fps, since the manifest already has each
+        keyframe's timestamp precomputed.
+        """
+        if not self.available() or not video_id:
+            return None
+        manifest_path = self.media_root / "metadata" / f"{video_id}_keyframes.json"
+        if not manifest_path.is_file():
+            return None
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        keyframes = payload.get("keyframes")
+        if not isinstance(keyframes, list) or not keyframes:
+            return None
+        best_entry = None
+        best_distance = None
+        for entry in keyframes:
+            if not isinstance(entry, dict):
+                continue
+            timestamp = entry.get("timestamp")
+            file_name = entry.get("file")
+            if not isinstance(timestamp, (int, float)) or not isinstance(file_name, str):
+                continue
+            distance = abs(float(timestamp) - seconds)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_entry = file_name
+        if best_entry is None:
+            return None
+        base = self._keyframe_base(video_id)
+        if base is None:
+            return None
+        candidate = base / best_entry
+        return candidate if candidate.is_file() else None
 
     def list_keyframes(self, video_id: str, *, limit: int = 50) -> list[tuple[int, Path]]:
         """List up to ``limit`` keyframes ordered by frame index."""

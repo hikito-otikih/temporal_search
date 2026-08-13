@@ -14,7 +14,7 @@ Backend: `src/main.py` (port 8001), real YouCook2 videos + real upstream sparse 
    `max_frames_per_run`) whose results are equal to or better than `adaptive_coarse`'s,
    and characterize how those knobs trade off recall against runtime.
 
-## Table 1 β€” `adaptive_coarse` hyperparameter sweep (n=50 real queries)
+## Table 1 — `adaptive_coarse` hyperparameter sweep (n=50 real queries)
 
 Methodology: for each retrieval config, one real `create session -> retrieve -> GET /regions`
 round trip per query (needs actual re-retrieval). All 7 weight configs for that retrieval
@@ -63,28 +63,28 @@ setting's cap.
 | flat_rrf (200/500/200) | mean_only (0/1/0) | 0.28 | 0.56 | 0.58 | 0.76 | 0.82 | 0.86 | 0.395 |
 
 **Winner: `top_n_per_variant=500, top_n_fused=1000, rrf_k=60` + weights `(coverage=0, mean=1.0, min=0)`**
-β€” r@1=0.380, r@5=0.520, r@10=0.640, r@20=0.760, r@50=0.820, r@100=0.860, MRR=0.461.
+— r@1=0.380, r@5=0.520, r@10=0.640, r@20=0.760, r@50=0.820, r@100=0.860, MRR=0.461.
 Compare to the previously-live config (`current` retrieval + `current` weights): r@1=0.260, MRR=0.373
-β€” a ~46% relative recall@1 improvement from re-ranking already-available signal, no new data.
+— a ~46% relative recall@1 improvement from re-ranking already-available signal, no new data.
 
 ### Findings
 
 1. **`rrf_k` doesn't matter.** 10 vs 60 vs 200 (`sharp_rrf`/`current`/`flat_rrf`, all at
    200/500 fan-out) are statistically indistinguishable at every K, for every weight config.
-   Consistent with most (event,video) pairs having only 1-2 real candidates β€” there's rarely
+   Consistent with most (event,video) pairs having only 1-2 real candidates — there's rarely
    enough rank depth for `rrf_k` to smooth over.
 2. **Mean score alone beats every blend that includes coverage or min**, once retrieval is
    wide. Coverage stops being discriminative when most surviving videos already hit every
    event at least weakly; it can no longer separate a good match from a mediocre one.
 3. **`coverage_only` + `wide` retrieval is the single worst combination in the whole grid**
-   (r@1=0.18, MRR=0.314) β€” worse than every narrow-retrieval config, despite `wide` winning
+   (r@1=0.18, MRR=0.314) — worse than every narrow-retrieval config, despite `wide` winning
    with the right weights. Widening retrieval creates more coverage-tied videos; ranking
    purely by coverage can't break those ties by quality. Retrieval breadth and ranking
    weights are not independently tunable.
 4. For **narrow** retrieval (`orig_default`, `sharp_rrf`, `flat_rrf`), `coverage_only` is
-   consistently the *best* weight choice instead β€” the opposite of finding 2. The right
+   consistently the *best* weight choice instead — the opposite of finding 2. The right
    weighting is conditional on retrieval width.
-5. **r@100 saturates around 0.86-0.90 for every config, largely independent of weighting** β€”
+5. **r@100 saturates around 0.86-0.90 for every config, largely independent of weighting** —
    unlike r@1..r@50, where weight choice swings results by up to 20 points, every weight config
    within a retrieval block converges to nearly the same r@100 (all 7 weight configs land within
    0.86-0.90 of each other at every retrieval width). Weighting mostly reorders *where* the
@@ -95,7 +95,7 @@ Compare to the previously-live config (`current` retrieval + `current` weights):
    evidence that `top_n_fused` isn't simply "more reach," it's competing for the same fixed
    `UPSTREAM_TOP_K=500` raw pool differently, not strictly supersetting the narrower configs.
 
-## Table 2 β€” `adaptive_full` frontier-width ladder (n=12, same queries throughout) vs `adaptive_coarse` baseline
+## Table 2 — `adaptive_full` frontier-width ladder (n=12, same queries throughout) vs `adaptive_coarse` baseline
 
 Baseline and all four `adaptive_full` configs use Table 1's winning retrieval/weight config
 (`top_n_per_variant=500, top_n_fused=1000, rrf_k=60`, weights `coverage=0, mean=1.0, min=0`),
@@ -103,7 +103,7 @@ so the only variable below is the `adaptive_full`-specific frontier sizing.
 
 | config | max_initial_videos / max_total_regions | r@1 | r@5 | r@10 | r@20 | r@50 | MRR | found/12 | avg latency/query |
 |---|---|---|---|---|---|---|---|---|---|
-| **adaptive_coarse baseline** | β€” | **0.417** | **0.417** | **0.583** | **0.667** | **0.833** | **0.446** | 12/12 | 1.4s |
+| **adaptive_coarse baseline** | — | **0.417** | **0.417** | **0.583** | **0.667** | **0.833** | **0.446** | 12/12 | 1.4s |
 | `old_defaults` (original pre-tuning defaults) | 5 / 60 | 0.417 | 0.417 | 0.417 | 0.417 | 0.417 | 0.417 | 5/12 | 18.4s |
 | `small` | 10 / 150 | 0.333 | 0.333 | 0.333 | 0.333 | 0.333 | 0.333 | 4/12 | 40.6s |
 | `medium` | 20 / 300 | 0.333 | 0.333 | 0.333 | 0.333 | 0.333 | 0.333 | 4/12 | 74.0s |
@@ -116,7 +116,7 @@ config so it was never the binding constraint.)
 ### Findings
 
 1. **No config in this ladder matches or beats `adaptive_coarse`, at any K.** `old_defaults`
-   (the smallest, cheapest config) comes closest β€” it ties coarse's r@1 but loses at every
+   (the smallest, cheapest config) comes closest — it ties coarse's r@1 but loses at every
    larger K, and every row is flat across K because `unique_video_count_max` never exceeds 2:
    there is essentially never more than 1-2 candidates in the ranked list at all, so K beyond
    that is moot.
@@ -130,20 +130,20 @@ config so it was never the binding constraint.)
    for a video to produce any tuple at all. Widening the frontier just considers more videos
    that still lack complete coverage; it doesn't fix the underlying sparsity.
 
-## Table 3 β€” `adaptive_coarse` sweep with `cluster_temporal_regions()` skipped (n=50, same queries as Table 1)
+## Table 3 — `adaptive_coarse` sweep with `cluster_temporal_regions()` skipped (n=50, same queries as Table 1)
 
-Same 5 retrieval configs Γ— 7 weight configs Γ— 50 queries as Table 1, so every row is directly
+Same 5 retrieval configs × 7 weight configs × 50 queries as Table 1, so every row is directly
 comparable. The only change: after `fuse_candidates_rrf()`, each fused candidate becomes its
 own singleton region (`K=1`, zero-width `start_seconds == end_seconds`) instead of being passed
-through `cluster_temporal_regions()` β€” isolating exactly what the clustering step itself buys.
+through `cluster_temporal_regions()` — isolating exactly what the clustering step itself buys.
 Retrieval was re-run for real (`UpstreamSearchClient.retrieve_candidates()` + `fuse_candidates_rrf()`
 called directly in Python, mirroring `service.py`'s `replace_candidates()` up to but not including
 clustering); region scores reuse the same `_candidate_normalized_scores_by_event()` calibration
 `cluster_temporal_regions()` itself uses, so scores stay numerically consistent with Table 1
-wherever a region is naturally a singleton anyway. Ξ” columns are Table 1 βˆ’ Table 3 (positive =
+wherever a region is naturally a singleton anyway. Δ columns are Table 1 - Table 3 (positive =
 clustering helped).
 
-| retrieval (top_n_per_variant / top_n_fused / rrf_k) | weights (coverage / mean / min) | r@1 | r@5 | r@10 | r@20 | r@50 | r@100 | MRR | Ξ”r@1 | Ξ”MRR | Ξ”r@100 |
+| retrieval (top_n_per_variant / top_n_fused / rrf_k) | weights (coverage / mean / min) | r@1 | r@5 | r@10 | r@20 | r@50 | r@100 | MRR | Δr@1 | ΔMRR | Δr@100 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | orig_default (50/100/60) | current (.5/.3/.2) | 0.24 | 0.46 | 0.56 | 0.68 | 0.86 | 0.86 | 0.370 | 0.00 | 0.000 | 0.00 |
 | orig_default (50/100/60) | coverage_heavy (.8/.1/.1) | 0.24 | 0.46 | 0.56 | 0.68 | 0.86 | 0.86 | 0.370 | 0.00 | 0.000 | 0.00 |
@@ -182,7 +182,7 @@ clustering helped).
 | flat_rrf (200/500/200) | mean_only (0/1/0) | 0.28 | 0.56 | 0.58 | 0.76 | 0.82 | 0.86 | 0.395 | 0.00 | 0.000 | 0.00 |
 
 **Best no-clustering config: `orig_default (50/100/60)` + `coverage_only (1/0/0)`**
-β€” r@1=0.32, r@5=0.50, r@10=0.56, r@20=0.70, r@50=0.86, r@100=0.86, MRR=0.420 (tied on r@1 with
+— r@1=0.32, r@5=0.50, r@10=0.56, r@20=0.70, r@50=0.86, r@100=0.86, MRR=0.420 (tied on r@1 with
 three other narrow-retrieval + `coverage_only` rows and with `wide`+`mean_only`, but strictly best
 on MRR). Table 1's actual winner (`wide`+`mean_only`) only reaches r@1=0.32/MRR=0.401 without
 clustering, down from r@1=0.38/MRR=0.461 with it.
@@ -191,35 +191,35 @@ clustering, down from r@1=0.38/MRR=0.461 with it.
 
 1. **Clustering has zero measurable effect at every retrieval width except `wide`.** All 28 rows
    under `orig_default`, `current`, `sharp_rrf`, and `flat_rrf` (i.e. every config with
-   `top_n_fused` ≀ 500) are identical between Table 1 and Table 3, to the row. This is the direct
+   `top_n_fused` <= 500) are identical between Table 1 and Table 3, to the row. This is the direct
    mechanical confirmation of Table 1/2's "most (event,video) pairs have only 1-2 real candidates"
    observation: with that few candidates, `cluster_temporal_regions()` almost never has more than
    one candidate within reach to merge, so each region is already a natural singleton and skipping
    the clustering step changes nothing.
-2. **At `wide` retrieval β€” the one place clustering has candidates to actually merge β€” it's a
+2. **At `wide` retrieval — the one place clustering has candidates to actually merge — it's a
    consistent net positive.** r@1 improves by +0.06 to +0.08 and MRR by +0.06 to +0.07 for every
    weight config except `coverage_only`. Merging temporally-close candidates into a stronger,
    better-scored region is genuinely more informative than ranking on the best singleton alone,
    but only once retrieval is deep enough to produce candidates worth merging.
-3. **`coverage_only` is the one weight config where clustering slightly hurts** (Ξ”r@1=-0.02,
-   Ξ”MRR=-0.005) at `wide` retrieval. Consistent with Table 1 finding #3 (`coverage_only`+`wide` is
+3. **`coverage_only` is the one weight config where clustering slightly hurts** (Δr@1=-0.02,
+   ΔMRR=-0.005) at `wide` retrieval. Consistent with Table 1 finding #3 (`coverage_only`+`wide` is
    already the grid's worst combination): clustering collapses several weak per-event hits into one
    region that still counts as "covering" the event, which makes a coverage-only ranking even less
    able to discriminate a strong match from a mediocre one.
 4. **Net effect on the pipeline's best achievable result:** clustering is entirely responsible for
    `wide`+`mean_only` being Table 1's winner. Remove it, and that same config drops from
    r@1=0.38/MRR=0.461 to r@1=0.32/MRR=0.401 (-16% relative r@1, -9% relative MRR), and the
-   best-overall config reverts to a narrow-retrieval + `coverage_only` combination β€” the same
+   best-overall config reverts to a narrow-retrieval + `coverage_only` combination — the same
    width-dependent weighting pattern Table 1 finding #4 already identified. Clustering doesn't
    improve `adaptive_coarse` in general; it specifically is what makes wide retrieval + mean-score
    ranking pay off.
 5. **Clustering's r@1-r@50 advantage at `wide` retrieval fully vanishes by r@100.** Every positive
-   Ξ” (current/coverage_heavy/mean_heavy/min_heavy/balanced/mean_only) closes to exactly 0.00 at
-   r@100 β€” both pipelines find the same 43/50 targets somewhere in the top 100 once the ranking
+   Δ (current/coverage_heavy/mean_heavy/min_heavy/balanced/mean_only) closes to exactly 0.00 at
+   r@100 — both pipelines find the same 43/50 targets somewhere in the top 100 once the ranking
    window is wide enough. Clustering only changes *where* a correct video lands near the top of the
    ranking, consistent with Table 1 finding #5; it doesn't expand which videos are reachable at
    all. The one exception is `coverage_only`+`wide`, where clustering's small deficit persists all
-   the way to r@100 (-0.02, i.e. one query's worth) rather than closing β€” plausibly because
+   the way to r@100 (-0.02, i.e. one query's worth) rather than closing — plausibly because
    `coverage_only` produces heavy score ties (many videos with identical/near-identical coverage),
    and clustering changes which video wins those ties, not merely how quickly they're found.
 
@@ -241,7 +241,7 @@ python -m benchmarks.youcook2 tuple-run \
   --output-dir <dir>
 ```
 
-Table 3 (no clustering) is not CLI-driven β€” it bypasses this repo's HTTP backend entirely and
+Table 3 (no clustering) is not CLI-driven — it bypasses this repo's HTTP backend entirely and
 calls `UpstreamSearchClient.retrieve_candidates()` + `fuse_candidates_rrf()` directly in Python
 (same real upstream service, same 50 queries as Table 1), building one singleton `TemporalRegion`
 per fused candidate instead of calling `cluster_temporal_regions()`. Standalone script, not

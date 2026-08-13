@@ -28,6 +28,7 @@ from .constants import (
     ERROR_CODE_REVISION_CONFLICT,
     ERROR_CODE_SESSION_NOT_FOUND,
     ERROR_CODE_UPSTREAM_SEARCH_ERROR,
+    ERROR_CODE_VIDEO_NOT_FOUND,
     ROUTER_PREFIX,
     ROUTER_TAGS,
     SUPPORTED_BOUNDARY_PROFILES,
@@ -53,10 +54,11 @@ from .exceptions import (
     SessionNotFoundError,
     UpstreamSearchError,
 )
-from .algorithms import prioritize_videos
+from .algorithms import prioritize_videos, robust_sigmoid
 from .boundary_refinement import refine_event_boundary
 from .boundary_seeds import select_event_seeds
 from .providers import VideoAssetNotFoundError
+from .tuple_ranking import rank_videos_by_region_tuples
 from .schemas import (
     BoundaryType,
     EventDefinition,
@@ -552,16 +554,51 @@ def get_video_priorities(
     session_id: str,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
-    apply_boundary_refinement: bool = Query(default=True),
+    apply_boundary_refinement: bool = Query(default=False),
+    apply_tuple_ranking: bool = Query(default=False),
 ):
     try:
         bundle = adaptive_service.get_session(session_id)
+        event_ids = [event.event_id for event in bundle.session.events]
         priorities = prioritize_videos(
             bundle.artifacts.regions,
-            [event.event_id for event in bundle.session.events],
+            event_ids,
             bundle.session.hyperparameters.refinement,
             bundle.session.constraints,
         )
+        candidates_by_id = {c.id: c for c in bundle.artifacts.candidates}
+
+        tuple_anchors_by_video: dict[str, dict[str, float]] = {}
+        if apply_tuple_ranking:
+            tuple_ranking, tuples_by_video = rank_videos_by_region_tuples(
+                bundle.artifacts.regions,
+                candidates_by_id,
+                event_ids,
+                bundle.session.hyperparameters.tuple_ranking,
+            )
+            # Raw tuple scores aren't bounded to [0,1] (mean region score can
+            # be pushed above 1 or below 0 by the order term) - normalize the
+            # same way assemble_ordered_tuples() already does for its own raw
+            # scores before writing into priority_score's UnitScore field.
+            normalized_by_video = dict(zip(
+                (video_id for video_id, _ in tuple_ranking),
+                robust_sigmoid([score for _, score in tuple_ranking]),
+            ))
+            priorities = sorted(
+                (
+                    priority.model_copy(update={"priority_score": normalized_by_video[priority.video_id]})
+                    for priority in priorities
+                    if priority.video_id in normalized_by_video
+                ),
+                key=lambda priority: (-priority.priority_score, priority.video_id),
+            )
+            for video_id, tuples in tuples_by_video.items():
+                winner = tuples[0]
+                tuple_anchors_by_video[video_id] = {
+                    event_id: timestamp
+                    for event_id, timestamp in zip(event_ids, winner.timestamps)
+                    if timestamp is not None
+                }
         page = priorities[offset : offset + limit]
 
         capability_available = False
@@ -571,7 +608,6 @@ def get_video_priorities(
             capability_available = capability.available
             capability_reason = capability.reason
 
-        candidates_by_id = {c.id: c for c in bundle.artifacts.candidates}
         items = [
             _video_priority_with_boundary_refinement(
                 priority,
@@ -580,6 +616,7 @@ def get_video_priorities(
                 requested=apply_boundary_refinement,
                 capability_available=capability_available,
                 capability_reason=capability_reason,
+                tuple_anchors=tuple_anchors_by_video.get(priority.video_id),
             )
             for priority in page
         ]
@@ -593,9 +630,87 @@ def get_video_priorities(
                 "available": capability_available,
                 "reason": capability_reason,
             },
+            "tuple_ranking": {"requested": apply_tuple_ranking},
         }
     except Exception as exc:
         _raise_api_error(exc)
+
+
+@router.get("/media/{video_id}/frame-preview")
+def get_frame_preview(
+    video_id: str,
+    anchor_seconds: float = Query(ge=0.0),
+    radius_frames: int = Query(default=15, ge=1, le=60),
+    stride: int = Query(default=1, ge=1, le=10),
+):
+    """Real native-fps frames around an anchor, for manual frame correction.
+
+    Only needs the frame provider (no embedder/scoring) - lighter weight than
+    boundary refinement and works even when just the decoder is configured.
+    """
+    try:
+        provider = boundary_refinement_runtime.frame_provider
+        capability = provider.capabilities()
+        if not capability.available:
+            raise LiveRefinementUnavailableError(
+                capability.reason or "frame provider is unavailable"
+            )
+        metadata = provider.catalog.metadata(video_id)
+        if metadata is None or metadata.fps is None:
+            raise VideoAssetNotFoundError(
+                f"no fps metadata available for video_id {video_id!r}"
+            )
+        fps = metadata.fps
+        duration_ms = metadata.duration_ms
+        anchor_frame = round(anchor_seconds * fps)
+
+        def frame_to_ms(index: int) -> int:
+            ms = max(0, round(index / fps * 1000))
+            return ms if duration_ms is None else min(ms, duration_ms)
+
+        offsets = range(-radius_frames, radius_frames + 1)
+        pts_by_offset = {offset: frame_to_ms(anchor_frame + offset * stride) for offset in offsets}
+        target_pts_ms = sorted(set(pts_by_offset.values()))
+        frames = provider.get_frames(video_id, target_pts_ms)
+        frames_by_pts = {frame.pts_ms: frame for frame in frames}
+
+        seen_pts: set[int] = set()
+        items: list[dict[str, Any]] = []
+        for offset in offsets:
+            pts_ms = pts_by_offset[offset]
+            if pts_ms in seen_pts:
+                continue
+            seen_pts.add(pts_ms)
+            frame = frames_by_pts.get(pts_ms)
+            if frame is None or frame.image is None:
+                continue
+            items.append(
+                {
+                    "offset": offset,
+                    "pts_ms": pts_ms,
+                    "timestamp_seconds": pts_ms / 1000.0,
+                    "image_base64": _encode_frame_jpeg(frame.image),
+                }
+            )
+        return {
+            "video_id": video_id,
+            "anchor_seconds": anchor_seconds,
+            "fps": fps,
+            "frames": items,
+        }
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+def _encode_frame_jpeg(image: Any) -> str:
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.fromarray(image).save(buffer, format="JPEG", quality=80)
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def _video_priority_with_boundary_refinement(
@@ -606,6 +721,7 @@ def _video_priority_with_boundary_refinement(
     requested: bool,
     capability_available: bool,
     capability_reason: str | None,
+    tuple_anchors: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     payload = priority.model_dump(mode="json")
     if not requested:
@@ -625,15 +741,53 @@ def _video_priority_with_boundary_refinement(
 
     events_out: list[dict[str, Any]] = []
     for event in bundle.session.events:
-        seeds = select_event_seeds(
-            regions=bundle.artifacts.regions,
-            candidates_by_id=candidates_by_id,
-            event_id=event.event_id,
-            video_id=priority.video_id,
-        )
-        if not seeds:
+        # A user-confirmed frame (commands/fix-frame) is authoritative: skip
+        # both seed-selection and the GPU refine call entirely for this event
+        # - there's nothing to refine once the user already picked the exact
+        # frame themselves.
+        event_constraint = bundle.session.constraints.event_constraints.get(event.event_id)
+        if (
+            event_constraint is not None
+            and event_constraint.fixed_video_id == priority.video_id
+            and event_constraint.fixed_timestamp_seconds is not None
+        ):
+            events_out.append(
+                {
+                    "event_id": event.event_id,
+                    "anchor_seconds": event_constraint.fixed_timestamp_seconds,
+                    "refined_seconds": event_constraint.fixed_timestamp_seconds,
+                    "used_fallback": False,
+                    "boundary_type": event.boundary_type,
+                    "sampled_frame_count": 0,
+                    "source": "user_fixed",
+                }
+            )
             continue
-        anchor_seconds = seeds[0]
+
+        # A winning region-tuple (apply_tuple_ranking=true) already chose one
+        # region per event jointly, order-aware - use its timestamp directly
+        # instead of re-deriving an independent per-event argmax, which is
+        # exactly the mechanism the tuple ranking was built to avoid (see
+        # tuple_ranking.py's module docstring). An event absent from
+        # tuple_anchors (not covered by the winning tuple) falls through to
+        # the same "nothing to refine" outcome independent selection would
+        # also reach, since both read from the same regions.
+        if tuple_anchors is not None:
+            anchor_seconds = tuple_anchors.get(event.event_id)
+            if anchor_seconds is None:
+                continue
+            anchor_source = "tuple_ranking"
+        else:
+            seeds = select_event_seeds(
+                regions=bundle.artifacts.regions,
+                candidates_by_id=candidates_by_id,
+                event_id=event.event_id,
+                video_id=priority.video_id,
+            )
+            if not seeds:
+                continue
+            anchor_seconds = seeds[0]
+            anchor_source = "auto"
         try:
             outcome = refine_event_boundary(
                 provider=boundary_refinement_runtime.frame_provider,
@@ -662,6 +816,7 @@ def _video_priority_with_boundary_refinement(
                 "used_fallback": outcome.used_fallback,
                 "boundary_type": event.boundary_type,
                 "sampled_frame_count": outcome.sampled_frame_count,
+                "source": anchor_source,
             }
         )
     payload["boundary_refinement"] = {
@@ -866,6 +1021,11 @@ def _raise_api_error(exc: Exception):
         raise HTTPException(
             status_code=422,
             detail={"code": code, "message": str(exc)},
+        ) from exc
+    if isinstance(exc, VideoAssetNotFoundError):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": ERROR_CODE_VIDEO_NOT_FOUND, "message": str(exc)},
         ) from exc
     if isinstance(exc, SessionNotFoundError):
         raise HTTPException(

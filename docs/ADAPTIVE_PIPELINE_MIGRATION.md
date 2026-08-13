@@ -17,19 +17,19 @@ HTTP request thật vào service đang chạy (không phải benchmark bypass-HT
 
 | Thành phần | Trước | Sau |
 |---|---|---|
-| `POST /v1/search-sessions/{id}/commands/refine` | Có (frontier-wide decode + dense scoring, orchestrator ~921 dòng) | **Đã xoá** β€” benchmark xác nhận không bao giờ thắng `adaptive_coarse` trên dữ liệu thật, chi phí GPU cao hơn |
-| `GET /v1/search-sessions/{id}/tuples` | Có | **Đã xoá** β€” HTTP surface duy nhất đọc lại `assemble_ordered_tuples`; nội bộ `bundle.artifacts.tuples` vẫn được `POST .../artifacts/frame-scores` và `commands/fix-frame` cập nhật (không xoá logic, chỉ xoá endpoint đọc) |
+| `POST /v1/search-sessions/{id}/commands/refine` | Có (frontier-wide decode + dense scoring, orchestrator ~921 dòng) | **Đã xoá** — benchmark xác nhận không bao giờ thắng `adaptive_coarse` trên dữ liệu thật, chi phí GPU cao hơn |
+| `GET /v1/search-sessions/{id}/tuples` | Có | **Đã xoá** — HTTP surface duy nhất đọc lại `assemble_ordered_tuples`; nội bộ `bundle.artifacts.tuples` vẫn được `POST .../artifacts/frame-scores` và `commands/fix-frame` cập nhật (không xoá logic, chỉ xoá endpoint đọc) |
 | `RefineSessionRequest`, `LiveRefinementOrchestrator` | Có | **Đã xoá** (đổi tên/thu gọn thành `BoundaryRefinementRuntime` trong `refinement_runtime.py`, ~230 dòng) |
 | `boundary_refinement.py`, `coarse_anchor.py` (region-seed) | Chỉ có trong `irrelevant_things/benchmarks/youcook2/` | **Port vào `src/adaptive_search/boundary_refinement.py` + `boundary_seeds.py`**, dùng lại `bundle.artifacts.regions/candidates` đã có sẵn trong session thay vì bypass-HTTP |
 | `GET /v1/search-sessions/{id}/video-priorities` | Trả `priorities` thô, không refine | Có thêm `apply_boundary_refinement` (query param, **mặc định `true`**), refine **mọi** event của **mọi** video trả về, kèm `boundary_refinement_capability` |
 | `POST /temporal-search` (legacy_temporal, legacy_ambiguous) | Không refine | Có thêm `apply_boundary_refinement` (body field, **mặc định `false`**), refine mọi candidate trong mọi tuple trả về |
-| `RetrievalHyperparameters` | `top_n_per_variant=200, top_n_fused=500` | `top_n_per_variant=500, top_n_fused=1000` (xem Β§3) |
-| `RefinementHyperparameters` weights | `coverage=.5 mean=.3 min=.2` | `coverage=0 mean=1.0 min=0` (xem Β§3) |
-| `algorithms.py` (clustering/ranking core) | β€” | **Không đổi** |
-| `frontier`, `assemble_ordered_tuples`, `RankingHyperparameters`, `proposal_profiles.py` | β€” | **Không đổi**, vẫn được dùng (xem Β§2) |
+| `RetrievalHyperparameters` | `top_n_per_variant=200, top_n_fused=500` | `top_n_per_variant=500, top_n_fused=1000` (xem §3) |
+| `RefinementHyperparameters` weights | `coverage=.5 mean=.3 min=.2` | `coverage=0 mean=1.0 min=0` (xem §3) |
+| `algorithms.py` (clustering/ranking core) | — | **Không đổi** |
+| `frontier`, `assemble_ordered_tuples`, `RankingHyperparameters`, `proposal_profiles.py` | — | **Không đổi**, vẫn được dùng (xem §2) |
 
 `adaptive_full` **chưa từng là một module thật**: `SearcherType` trong
-`session.py` chỉ có `adaptive_temporal` β€” "coarse" và "full" chỉ là nhãn của
+`session.py` chỉ có `adaptive_temporal` — "coarse" và "full" chỉ là nhãn của
 benchmark runner gọi các tập con khác nhau của cùng một bộ HTTP endpoint. Vì
 vậy "loại bỏ adaptive_full" ở đây nghĩa là loại bỏ code path
 live-dense-refinement-toàn-frontier (`commands/refine`, `GET /tuples`,
@@ -42,8 +42,8 @@ live-dense-refinement-toàn-frontier (`commands/refine`, `GET /tuples`,
 `max_total_regions`, `max_regions_per_event_per_video`, `max_frames_per_run`)
 mà `adaptive_full` thắng `adaptive_coarse` trên recall thật, trong khi chi phí
 GPU decode+embed của nó luôn cao hơn hẳn. `boundary_refinement_results.md`
-cho thấy một stage rẻ hơn nhiều β€” sweep local Β±10-native-frame quanh anchor đã
-chọn, dùng lại change-point detector sẵn có β€” cải thiện precision thời điểm
+cho thấy một stage rẻ hơn nhiều — sweep local ±10-native-frame quanh anchor đã
+chọn, dùng lại change-point detector sẵn có — cải thiện precision thời điểm
 đo được, với chi phí chỉ bằng một phần nhỏ của frontier-wide refine.
 
 **Bị xoá** (`refinement.py`, 921 dòng): `refine_session`, `_refine_video_group`,
@@ -61,7 +61,7 @@ xoá), vẫn được test bởi các file không liên quan riêng đến refin
 (`test_adaptive_constraints.py`, `test_adaptive_algorithms.py`,
 `test_adaptive_invalidation.py`), và `commands/fix-frame` vẫn phụ thuộc hợp lệ
 vào `assemble_ordered_tuples`. `proposal_profiles.py` còn được
-`boundary_refinement.py` dùng trực tiếp (xem Β§4), không hề là dead code.
+`boundary_refinement.py` dùng trực tiếp (xem §4), không hề là dead code.
 
 **Được giữ và đổi tên**: `refinement_runtime.py` (trước là `refinement.py`)
 giữ lại đúng phần capability-reporting/text-fallback mà stage rẻ mới cần:
@@ -69,7 +69,7 @@ giữ lại đúng phần capability-reporting/text-fallback mà stage rẻ mớ
 `LiveRefinementOrchestrator`), `configured_runtime_spec()`,
 `_validate_embedder_identity`, `state_queries()`, `score_frames()`. Class này
 cố tình **không** còn phụ thuộc `AdaptiveSearchService` (bản cũ đọc
-`service.frame_provider`) β€” boundary refinement là stateless và được
+`service.frame_provider`) — boundary refinement là stateless và được
 `legacy_search` dùng lại y hệt, mà `legacy_search` không có session/service
 riêng.
 
@@ -86,7 +86,7 @@ Nguồn: sweep n=50 câu hỏi thật, chi tiết đầy đủ trong
 | `RefinementHyperparameters.video_coverage_weight` | 0.5 | **0.0** | mean-only thắng mọi blend có coverage/min một khi retrieval đã rộng (finding #2) |
 | `RefinementHyperparameters.video_mean_weight` | 0.3 | **1.0** | (như trên) |
 | `RefinementHyperparameters.video_min_weight` | 0.2 | **0.0** | (như trên) |
-| `ClusteringHyperparameters.gap_seconds` | 3.0 | 3.0 (không đổi) | Sweep (n=60) xác nhận `gap_seconds` **vô hiệu** dưới thiết kế hiện tại: `seeds[0]` luôn là candidate có `raw_relevance_score` cao nhất, và candidate đó luôn thuộc region có `raw_coarse_score` cao nhất (vì `raw_coarse_score = max` trong region) β€” bất biến với việc chia region theo `gap_seconds`. Xác nhận bằng cả đọc code lẫn thực nghiệm (byte-identical trên `gap_seconds` từ 0.5 đến 30.0) |
+| `ClusteringHyperparameters.gap_seconds` | 3.0 | 3.0 (không đổi) | Sweep (n=60) xác nhận `gap_seconds` **vô hiệu** dưới thiết kế hiện tại: `seeds[0]` luôn là candidate có `raw_relevance_score` cao nhất, và candidate đó luôn thuộc region có `raw_coarse_score` cao nhất (vì `raw_coarse_score = max` trong region) — bất biến với việc chia region theo `gap_seconds`. Xác nhận bằng cả đọc code lẫn thực nghiệm (byte-identical trên `gap_seconds` từ 0.5 đến 30.0) |
 | `boundary_refinement`'s `radius_frames`/`stride` | (chỉ có trong benchmark) | **10 / 1** | Sweep không tìm được cấu hình nào tốt hơn; port nguyên giá trị |
 
 `validate_refinement_configuration`'s ràng buộc `coverage+mean+min > 0` vẫn
@@ -97,12 +97,12 @@ Nguồn: sweep n=50 câu hỏi thật, chi tiết đầy đủ trong
 ### 4.1 Kiến trúc
 
 `boundary_refinement.py::refine_event_boundary()` (port từ benchmark, một
-correctness fix quan trọng β€” xem Β§4.2):
+correctness fix quan trọng — xem §4.2):
 
 1. Nhận một anchor (giây) đã được pipeline khác chọn sẵn cho một event trong
    một video.
 2. Lấy `radius_frames=10` frame gốc (native fps) mỗi bên, cách nhau `stride=1`
-   frame β€” qua `FrameProvider.get_frames()` (PyAV, PTS thật).
+   frame — qua `FrameProvider.get_frames()` (PyAV, PTS thật).
 3. Encode các frame đó cùng `anchor_query`/`pre_state`/`post_state` bằng
    `TextImageEmbedder` (SigLIP2), dùng lại `score_event_frames()`.
 4. Gọi `generate_profiled_proposals()` (dispatch theo `boundary_type`, **không
@@ -112,23 +112,23 @@ correctness fix quan trọng β€” xem Β§4.2):
    sampled_frame_count, top_proposal)`. Nếu provider không trả frame nào
    (`used_fallback=True`), `refined_seconds == anchor_seconds`.
 
-Stage này **stateless và không persist** β€” không ghi vào session, không có
+Stage này **stateless và không persist** — không ghi vào session, không có
 artifact riêng, không invalidation stage mới. Mỗi request tính lại từ đầu.
 
 Seed nào được refine cho `adaptive_coarse`: `boundary_seeds.select_event_seeds()`
-(port từ benchmark's `coarse_anchor.py`) chọn `seeds[0]` β€” candidate có
+(port từ benchmark's `coarse_anchor.py`) chọn `seeds[0]` — candidate có
 `raw_relevance_score` cao nhất trong tối đa 2 region tốt nhất (ngưỡng 10% so
-với region tốt nhất, tối đa 6 seed) β€” **chỉ seed tốt nhất được refine**, không
+với region tốt nhất, tối đa 6 seed) — **chỉ seed tốt nhất được refine**, không
 so sánh `final_event_score` giữa nhiều seed độc lập (mỗi seed được
-`robust_sigmoid` calibrate trên population riêng của nó β€” so sánh trực tiếp
+`robust_sigmoid` calibrate trên population riêng của nó — so sánh trực tiếp
 giữa các neighborhood khác nhau là không hợp lệ về mặt toán học).
 
 `legacy_search` **không dùng `boundary_seeds`**: mỗi `ClusteredCandidate` mà
 `TemporalSearcher`/`AmbiguousSearcher` chọn đã là một frame duy nhất cho một
-event β€” không có cấu trúc region/candidate-pool để chọn seed như
+event — không có cấu trúc region/candidate-pool để chọn seed như
 `adaptive_coarse`. Anchor refine trực tiếp là
 `parse_display_timestamp(candidate.timestamp)` (chuỗi `"MM:SS"` upstream trả
-về, **không phải** `frame_index` β€” đó là keyframe index nội bộ của upstream,
+về, **không phải** `frame_index` — đó là keyframe index nội bộ của upstream,
 không liên quan fps thật).
 
 ### 4.2 Correctness fix so với bản benchmark: `pre_state`/`post_state` optional
@@ -138,12 +138,12 @@ non-null (chỉ gọi cho các câu hỏi "khoảnh khắc đầu/cuối" có st
 sẵn). `legacy_search` không có state semantics nào cho một câu query tự do bất
 kỳ. Nếu gán cùng một fallback text cho cả `pre_state` và `post_state`,
 `pairwise_softmax(x, x)` trả đúng `(0.5, 0.5)` cho **mọi** frame (xác minh trực
-tiếp trong `algorithms.py`) β€” contrast score của transition-detector suy biến
+tiếp trong `algorithms.py`) — contrast score của transition-detector suy biến
 thành nhiễu thuần, một lỗi correctness âm thầm chứ không phải giả thuyết.
 
 Fix: `generate_profiled_proposals()` (`proposal_profiles.py`) đã sẵn có dispatch
 `boundary_type="unknown"` + `pre_state=None`/`post_state=None` sang một profile
-khác hẳn ("state" β€” anchor-persistence re-centering trên `normalized_anchor_score`
+khác hẳn ("state" — anchor-persistence re-centering trên `normalized_anchor_score`
 riêng, không đụng đến cột pre/post) thay vì transition path suy biến. Production
 `boundary_refinement.py` gọi `generate_profiled_proposals()`, không gọi hàm thô.
 
@@ -188,13 +188,13 @@ skipped_no_metadata, skipped_video_not_in_catalog, not_requested}`.
 ### 5.2 `POST /temporal-search`
 
 Request thêm field `apply_boundary_refinement: bool = false` (mặc định
-**TẮT** β€” khác mặc định với adaptive vì đây là endpoint cũ, không được đổi
+**TẮT** — khác mặc định với adaptive vì đây là endpoint cũ, không được đổi
 hành vi mặc định để tránh phá client hiện tại). Mỗi `ClusteredCandidate` trong
 `tuple` có thêm `refined_timestamp_seconds` và `boundary_refinement_status`
-(cùng tập giá trị Β§5.1). Response top-level có thêm
-`boundary_refinement_capability` y hệt Β§5.1.
+(cùng tập giá trị §5.1). Response top-level có thêm
+`boundary_refinement_capability` y hệt §5.1.
 
-Ví dụ thật (flag bật, group `FTdfwoxgMTU`, xem Β§7 để có toàn bộ request):
+Ví dụ thật (flag bật, group `FTdfwoxgMTU`, xem §7 để có toàn bộ request):
 
 ```json
 {
@@ -215,13 +215,13 @@ Ví dụ thật (flag bật, group `FTdfwoxgMTU`, xem Β§7 để có toàn bộ
 ### 5.3 Graceful-degradation contract (chung cho cả hai endpoint)
 
 Một lần kiểm tra capability cho mỗi request
-(`BoundaryRefinementRuntime.capabilities()`) β†’ nếu không khả dụng, mọi item
+(`BoundaryRefinementRuntime.capabilities()`) → nếu không khả dụng, mọi item
 được đánh dấu `skipped_runtime_unavailable`, response vẫn `200` với
 `boundary_refinement_capability.available=false`. Khi capability khả dụng,
-một lần kiểm tra cho mỗi item (thiếu metadata / video không có trong catalog β€”
-cả hai đều là trường hợp thật, không phải giả thuyết, xem Β§7.2) β†’ item đó
+một lần kiểm tra cho mỗi item (thiếu metadata / video không có trong catalog —
+cả hai đều là trường hợp thật, không phải giả thuyết, xem §7.2) → item đó
 được đánh dấu tương ứng, giữ nguyên kết quả chưa refine, tiếp tục các item
-khác. Không có mã lỗi HTTP mới cho "chưa cấu hình" β€” chỉ lỗi thật giữa chừng
+khác. Không có mã lỗi HTTP mới cho "chưa cấu hình" — chỉ lỗi thật giữa chừng
 (embedding/runtime error) mới raise loudly (tái dùng
 `ERROR_CODE_LIVE_REFINEMENT_*`, `legacy_search`'s `router.py` dùng lại đúng
 `adaptive_search.router._raise_api_error`).
@@ -230,8 +230,8 @@ khác. Không có mã lỗi HTTP mới cho "chưa cấu hình" β€” chỉ l�
 
 Quyết định phạm vi (xác nhận với user trước khi build): refine **mọi** event
 của **mọi** video/tuple trả về, không chỉ top-1/top-N. Chi phí worst-case mỗi
-request là `O(số video/tuple Γ— số event Γ— (2Γ—radius_frames+1) frame decode +
-embed)`. Với `radius_frames=10` β†’ tối đa 21 frame/event. Batch thật trong Β§7:
+request là `O(số video/tuple × số event × (2×radius_frames+1) frame decode +
+embed)`. Với `radius_frames=10` → tối đa 21 frame/event. Batch thật trong §7:
 `adaptive_coarse` với `top_k=50` retrieve và ~90-105 video/group mất vài giây
 đến vài chục giây mỗi group (embedding SigLIP2 trên GPU, batch size 32).
 Khuyến nghị vận hành: giữ `top_k_tuple`/`top_k_each_query` (legacy) và số
@@ -243,65 +243,65 @@ flag, vì chi phí tuyến tính theo số kết quả chứ không có cap cứ
 Script: `scripts/verify_migration.py` (ad hoc, không thuộc test suite chính
 thức). Chạy thật với `.venv/bin/python3 scripts/verify_migration.py` nhắm vào
 `src/main.py` đang chạy port 8001, dùng 5 group câu hỏi YouCook2 thật (2 group
-3-event, 3 group 4-event β€” bộ dữ liệu 203 file query thật trong
+3-event, 3 group 4-event — bộ dữ liệu 203 file query thật trong
 `YOUCOOK2_DATA_ROOT/query` chỉ có group 3 hoặc 4-event, không có group 1-event
-để test). Toàn bộ 6 kiểm tra: `legacy_temporal`/`legacy_ambiguous` Γ—
-flag on/off, `adaptive_coarse` Γ— flag on/off (mặc định, không truyền query
-param) β€” tổng thời gian chạy thật **7m35s** cho GPU inference + upstream
+để test). Toàn bộ 6 kiểm tra: `legacy_temporal`/`legacy_ambiguous` ×
+flag on/off, `adaptive_coarse` × flag on/off (mặc định, không truyền query
+param) — tổng thời gian chạy thật **7m35s** cho GPU inference + upstream
 retrieval thật.
 
 ### 7.1 Kết quả tóm tắt (từ `scratch/verify_migration_results.json`)
 
 | Check | Trạng thái | Ghi chú |
 |---|---|---|
-| 1. `legacy_temporal`, flag off | βœ“ 200, mọi candidate `not_requested` | 60/60 candidate (chỉ 1/5 group có tuple hợp lệ β€” xem Β§7.2) |
-| 2. `legacy_temporal`, flag on | βœ“ 200, mọi candidate `applied` | 60/60 `applied`, `refined_timestamp_seconds` lệch anchor ≀0.4s (xem ví dụ Β§5.2) |
-| 3. `legacy_ambiguous`, flag off | βœ“ 200, mọi candidate `not_requested` | 60/60, byte-identical shape với check 1 ngoại trừ `boundary_refinement_status` |
-| 4. `legacy_ambiguous`, flag on | βœ“ 200, mọi candidate `applied` | 60/60 `applied` |
-| 5. `adaptive_coarse`, flag off (`apply_boundary_refinement=false`) | βœ“ 200, `capability.requested=false` | 421/421 item `not_requested` trên cả 5 group |
-| 6. `adaptive_coarse`, mặc định (không truyền query param β†’ on) | βœ“ 200, `capability.available=true` | 421/421 item `applied`; `refined_seconds` khác `anchor_seconds` rõ ràng ở nhiều event (delta mẫu: -0.33s .. +0.41s), xác nhận seed-selection + refine chạy thật hết pipeline |
+| 1. `legacy_temporal`, flag off | OK 200, mọi candidate `not_requested` | 60/60 candidate (chỉ 1/5 group có tuple hợp lệ — xem §7.2) |
+| 2. `legacy_temporal`, flag on | OK 200, mọi candidate `applied` | 60/60 `applied`, `refined_timestamp_seconds` lệch anchor <=0.4s (xem ví dụ §5.2) |
+| 3. `legacy_ambiguous`, flag off | OK 200, mọi candidate `not_requested` | 60/60, byte-identical shape với check 1 ngoại trừ `boundary_refinement_status` |
+| 4. `legacy_ambiguous`, flag on | OK 200, mọi candidate `applied` | 60/60 `applied` |
+| 5. `adaptive_coarse`, flag off (`apply_boundary_refinement=false`) | OK 200, `capability.requested=false` | 421/421 item `not_requested` trên cả 5 group |
+| 6. `adaptive_coarse`, mặc định (không truyền query param → on) | OK 200, `capability.available=true` | 421/421 item `applied`; `refined_seconds` khác `anchor_seconds` rõ ràng ở nhiều event (delta mẫu: -0.33s .. +0.41s), xác nhận seed-selection + refine chạy thật hết pipeline |
 
 ### 7.2 Phát hiện thật trong lúc xác minh (không phải bug của migration này)
 
 - **`YOUCOOK2_METADATA_ROOT` chưa được cấu hình trong `.env`** trước khi bắt
-  đầu xác minh β€” khiến `catalog.metadata()` luôn trả `None` cho mọi video
+  đầu xác minh — khiến `catalog.metadata()` luôn trả `None` cho mọi video
   (endpoint scan `*_keyframes.json`, không phải `<video_id>.json` trơn), tức
   là mọi refine đều bị `skipped_no_metadata` dù capability khả dụng. Đã thêm
   `YOUCOOK2_METADATA_ROOT=/mnt/c/Users/huynh/Downloads/youcook2/metadata` vào
   `.env` (thư mục này đã có sẵn 1660 file `*_keyframes.json`, bao gồm đủ cho
-  cả 5 video ground-truth dùng trong xác minh) β€” đây là một gap cấu hình môi
+  cả 5 video ground-truth dùng trong xác minh) — đây là một gap cấu hình môi
   trường có sẵn từ trước, không phải lỗi phát sinh từ migration, nhưng **bắt
   buộc phải sửa để "applied" path chạy được thật** trong production.
 - **`legacy_temporal`/`legacy_ambiguous` chỉ tìm được tuple hợp lệ cho 1/5
   group** ở `top_k_each_query=50` (VswrGW9b3ck, 0IuQKThr-pM, 0JVmVXLrNZo,
   0Mz4NTozNXw đều trả `results: []`). Hành vi này **giống hệt nhau khi flag
-  bật/tắt** β€” xác nhận `apply_boundary_refinement` không hề ảnh hưởng đến
+  bật/tắt** — xác nhận `apply_boundary_refinement` không hề ảnh hưởng đến
   retrieval/backtracking, chỉ post-process tuple đã có. Đây là đặc điểm có
   sẵn của `TemporalSearcher`/`AmbiguousSearcher` (cần cùng một video nhận đủ
   hit từ top-50 sparse search cho **mọi** event) kết hợp với recall tiếng Việt
   hạn chế (xem `hyperparameter_sweep_results.md`) chứ không phải regression
   của migration này. Không nằm trong phạm vi báo cáo này để cải thiện recall
-  (xem Β§8).
+  (xem §8).
 
 ### 7.3 Hai kiểm tra chế độ suy giảm (degraded mode), qua restart process thật
 
-Không chỉ unit test β€” tắt hẳn `YOUCOOK2_DATA_ROOT`/`YOUCOOK2_METADATA_ROOT`
+Không chỉ unit test — tắt hẳn `YOUCOOK2_DATA_ROOT`/`YOUCOOK2_METADATA_ROOT`
 trong `.env`, restart `src/main.py` thật (không phải monkeypatch trong cùng
 process), xác nhận qua `GET /v1/searchers`:
 `live_refinement_available=false`, `reason="no raw video or frame API is
 configured"`. Sau đó:
 
-- **legacy_temporal, flag on**: `POST /temporal-search` β†’ 200,
+- **legacy_temporal, flag on**: `POST /temporal-search` → 200,
   `boundary_refinement_capability={requested:true, available:false, reason:
   "no raw video or frame API is configured"}`, mọi candidate
   `skipped_runtime_unavailable`, không candidate nào có
   `refined_timestamp_seconds`.
 - **adaptive_coarse, mặc định (on)**: full lifecycle
-  (`POST /v1/search-sessions` β†’ `POST commands/retrieve` β†’
-  `GET video-priorities`) β†’ 200 ở mọi bước, capability giống hệt trên, mọi
+  (`POST /v1/search-sessions` → `POST commands/retrieve` →
+  `GET video-priorities`) → 200 ở mọi bước, capability giống hệt trên, mọi
   item `skipped_runtime_unavailable`.
 
-Cả hai đều **200**, không có lỗi 5xx nào β€” đúng hợp đồng graceful-degradation
+Cả hai đều **200**, không có lỗi 5xx nào — đúng hợp đồng graceful-degradation
 qua toàn bộ process startup thật, không chỉ qua test giả lập. Sau khi xác
 minh xong, `.env` được khôi phục lại đầy đủ và service được restart lại lần
 nữa; `GET /v1/searchers` xác nhận `live_refinement_available=true` trở lại.
@@ -312,19 +312,19 @@ nữa; `GET /v1/searchers` xác nhận `live_refinement_available=true` trở l�
   (trước đây có thể đọc lại `proposal`/`tuple` đã build); `commands/fix-frame`
   vẫn hoạt động đúng vì nó không phụ thuộc endpoint đọc, chỉ phụ thuộc
   `assemble_ordered_tuples` nội bộ (không đổi).
-- **`frontier`/tuple internals cố tình không đụng tới** (Β§2) β€” không phải bị
+- **`frontier`/tuple internals cố tình không đụng tới** (§2) — không phải bị
   bỏ sót, mà là quyết định phạm vi có lý do rõ ràng.
-- **Không có re-validation recall nào mới** trong báo cáo này β€” recall của
+- **Không có re-validation recall nào mới** trong báo cáo này — recall của
   `adaptive_coarse` đã được benchmark xác nhận riêng trong
   `hyperparameter_sweep_results.md`; báo cáo này chỉ xác nhận **migration**
   (đưa code + default vào service thật) hoạt động đúng, không đo lại chất
   lượng tìm kiếm.
 - **3 tài liệu cũ (`ADAPTIVE_TEMPORAL_SEARCH.md`, `STREAMLIT_UI_IMPLEMENTATION_PLAN.md`,
   `YOUCOOK2_RUNTIME_AND_BENCHMARK.md`) vẫn còn mô tả `commands/refine`/
-  `GET /tuples` cũ** β€” các endpoint này đã bị xoá theo migration này nhưng 3
+  `GET /tuples` cũ** — các endpoint này đã bị xoá theo migration này nhưng 3
   file trên **chưa được cập nhật lại** (ngoài phạm vi công việc này). Tài liệu
   hiện tại (`ADAPTIVE_PIPELINE_MIGRATION.md`) là nguồn đúng nhất cho trạng thái
   endpoint sau migration; cần cập nhật 3 file kia ở một lần làm việc khác.
-- **`legacy_search` recall thấp ở `top_k_each_query` nhỏ** (Β§7.2) không được
-  cải thiện trong phạm vi migration này β€” chỉ đúng khi flag refine bật/tắt
+- **`legacy_search` recall thấp ở `top_k_each_query` nhỏ** (§7.2) không được
+  cải thiện trong phạm vi migration này — chỉ đúng khi flag refine bật/tắt
   đều cho kết quả giống hệt nhau về mặt retrieval, đúng như kỳ vọng.

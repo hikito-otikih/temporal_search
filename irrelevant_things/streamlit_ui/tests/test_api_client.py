@@ -154,6 +154,127 @@ class ApiClientTests(unittest.TestCase):
         client.upstream_search("some event text", top_k=100)
         self.assertEqual(set(captured["json"]), {"query", "top_k"})
 
+    def test_legacy_request_includes_apply_boundary_refinement(self):
+        captured = {}
+
+        def handler(request):
+            captured["json"] = __import__("json").loads(request.content)
+            return json_response({"query": ["q"], "results": []})
+
+        client = make_client(handler)
+        client.legacy_search(queries=["q"], apply_boundary_refinement=True)
+        self.assertTrue(captured["json"]["apply_boundary_refinement"])
+
+        client.legacy_search(queries=["q"])
+        self.assertFalse(captured["json"]["apply_boundary_refinement"])
+
+    def test_create_session_from_queries_payload_and_response(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            captured["json"] = __import__("json").loads(request.content)
+            return json_response(
+                {
+                    "session": {"id": "s1", "revision": 0},
+                    "artifact_counts": {},
+                    "live_refinement": {},
+                }
+            )
+
+        client = make_client(handler)
+        response = client.create_session_from_queries(
+            queries=["cuts an onion", "fries it in a pan"], common_query="cooking video"
+        )
+        self.assertTrue(captured["url"].endswith("/v1/search-sessions/from-queries"))
+        self.assertEqual(
+            captured["json"],
+            {"query": ["cuts an onion", "fries it in a pan"], "common_query": "cooking video"},
+        )
+        self.assertEqual(response.session["id"], "s1")
+
+    def test_retrieve_session_payload_is_exact(self):
+        captured = {}
+
+        def handler(request):
+            captured["method"] = request.method
+            captured["url"] = str(request.url)
+            captured["json"] = __import__("json").loads(request.content)
+            return json_response(
+                {"session_revision": 1, "run_id": "r1", "run_status": "completed"}
+            )
+
+        client = make_client(handler)
+        response = client.retrieve_session("s1", top_k=50)
+        self.assertEqual(captured["method"], "POST")
+        self.assertTrue(captured["url"].endswith("/v1/search-sessions/s1/commands/retrieve"))
+        self.assertEqual(captured["json"], {"top_k": 50, "event_ids": None})
+        self.assertEqual(response.run_id, "r1")
+
+    def test_get_frame_preview_request_params(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            return json_response(
+                {"video_id": "v1", "anchor_seconds": 5.0, "fps": 30.0, "frames": []}
+            )
+
+        client = make_client(handler)
+        data = client.get_frame_preview("v1", anchor_seconds=5.0, radius_frames=15, stride=1)
+        self.assertTrue(captured["url"].endswith(
+            "/v1/media/v1/frame-preview?anchor_seconds=5.0&radius_frames=15&stride=1"
+        ))
+        self.assertEqual(data["fps"], 30.0)
+
+    def test_get_video_priorities_request_params(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            return json_response(
+                {
+                    "items": [],
+                    "total": 0,
+                    "offset": 0,
+                    "limit": 20,
+                    "boundary_refinement_capability": {"requested": True, "available": False},
+                }
+            )
+
+        client = make_client(handler)
+        data = client.get_video_priorities("s1", limit=20, apply_boundary_refinement=True)
+        self.assertTrue(captured["url"].endswith(
+            "/v1/search-sessions/s1/video-priorities"
+            "?offset=0&limit=20&apply_boundary_refinement=true&apply_tuple_ranking=false"
+        ))
+        self.assertEqual(data["boundary_refinement_capability"]["available"], False)
+
+    def test_get_video_priorities_apply_tuple_ranking_request_param(self):
+        captured = {}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            return json_response(
+                {
+                    "items": [],
+                    "total": 0,
+                    "offset": 0,
+                    "limit": 20,
+                    "boundary_refinement_capability": {"requested": False, "available": False},
+                    "tuple_ranking": {"requested": True},
+                }
+            )
+
+        client = make_client(handler)
+        client.get_video_priorities(
+            "s1", limit=20, apply_boundary_refinement=False, apply_tuple_ranking=True
+        )
+        self.assertTrue(captured["url"].endswith(
+            "/v1/search-sessions/s1/video-priorities"
+            "?offset=0&limit=20&apply_boundary_refinement=false&apply_tuple_ranking=true"
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

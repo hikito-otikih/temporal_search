@@ -57,10 +57,16 @@ class FakeEmbedder:
     preprocess_version = "fake-rgb-v1"
     instruction = ""
 
+    def __init__(self):
+        self.encode_text_calls = 0
+        self.encode_image_calls = 0
+
     def encode_texts(self, texts):
+        self.encode_text_calls += 1
         return np.eye(3, dtype=np.float32)
 
     def encode_images(self, images):
+        self.encode_image_calls += 1
         return l2_normalize(np.asarray(images, dtype=np.float32))
 
 
@@ -105,17 +111,13 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return session_id
 
-    def test_default_is_on_and_reports_capability_unavailable_without_a_configured_runtime(self):
+    def test_default_is_off_and_items_are_not_requested(self):
         session_id = self._create_session_with_one_candidate()
         response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
-        self.assertTrue(body["boundary_refinement_capability"]["requested"])
-        self.assertFalse(body["boundary_refinement_capability"]["available"])
-        self.assertEqual(
-            body["items"][0]["boundary_refinement"]["status"], "skipped_runtime_unavailable"
-        )
-        self.assertIsNone(body["items"][0]["boundary_refinement"]["events"])
+        self.assertFalse(body["boundary_refinement_capability"]["requested"])
+        self.assertEqual(body["items"][0]["boundary_refinement"]["status"], "not_requested")
 
     def test_flag_off_skips_refinement_entirely(self):
         session_id = self._create_session_with_one_candidate()
@@ -127,12 +129,30 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
         self.assertFalse(body["boundary_refinement_capability"]["requested"])
         self.assertEqual(body["items"][0]["boundary_refinement"]["status"], "not_requested")
 
+    def test_flag_on_reports_capability_unavailable_without_a_configured_runtime(self):
+        session_id = self._create_session_with_one_candidate()
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertTrue(body["boundary_refinement_capability"]["requested"])
+        self.assertFalse(body["boundary_refinement_capability"]["available"])
+        self.assertEqual(
+            body["items"][0]["boundary_refinement"]["status"], "skipped_runtime_unavailable"
+        )
+        self.assertIsNone(body["items"][0]["boundary_refinement"]["events"])
+
     def test_applied_when_runtime_is_configured(self):
         boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
         boundary_refinement_runtime.embedder = FakeEmbedder()
         session_id = self._create_session_with_one_candidate()
 
-        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
         body = response.json()
         self.assertTrue(body["boundary_refinement_capability"]["available"])
@@ -144,6 +164,55 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
         self.assertEqual(events[0]["anchor_seconds"], 10.0)
         self.assertIsInstance(events[0]["refined_seconds"], float)
 
+    def test_user_fixed_frame_is_authoritative_and_skips_refinement(self):
+        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
+        embedder = FakeEmbedder()
+        boundary_refinement_runtime.embedder = embedder
+        session_id = self._create_session_with_one_candidate()
+
+        fix_response = self.client.post(
+            f"/v1/search-sessions/{session_id}/commands/fix-frame",
+            json={
+                "expected_revision": 0,
+                "event_id": "e1",
+                "video_id": "video_full",
+                "frame_id": 1260,
+                "timestamp_seconds": 42.0,
+            },
+        )
+        self.assertEqual(fix_response.status_code, 200, fix_response.text)
+
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["boundary_refinement"]["status"], "applied")
+        events = item["boundary_refinement"]["events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["source"], "user_fixed")
+        self.assertEqual(events[0]["anchor_seconds"], 42.0)
+        self.assertEqual(events[0]["refined_seconds"], 42.0)
+        self.assertFalse(events[0]["used_fallback"])
+        self.assertEqual(events[0]["sampled_frame_count"], 0)
+        # Genuinely skipped, not just relabeled: the embedder was never
+        # invoked for this event's (already user-confirmed) frame.
+        self.assertEqual(embedder.encode_text_calls, 0)
+        self.assertEqual(embedder.encode_image_calls, 0)
+
+    def test_auto_refined_events_are_labeled_source_auto(self):
+        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
+        boundary_refinement_runtime.embedder = FakeEmbedder()
+        session_id = self._create_session_with_one_candidate()
+
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true"},
+        )
+        events = response.json()["items"][0]["boundary_refinement"]["events"]
+        self.assertEqual(events[0]["source"], "auto")
+
     def test_per_video_metadata_miss_is_skipped_without_failing_the_request(self):
         # video_full has no known metadata in this fake catalog -> that one
         # item degrades gracefully; the request as a whole still succeeds.
@@ -151,7 +220,10 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
         boundary_refinement_runtime.embedder = FakeEmbedder()
         session_id = self._create_session_with_one_candidate()
 
-        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true"},
+        )
         self.assertEqual(response.status_code, 200, response.text)
         item = response.json()["items"][0]
         self.assertEqual(item["boundary_refinement"]["status"], "skipped_no_metadata")

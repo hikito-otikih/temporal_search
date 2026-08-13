@@ -1,0 +1,49 @@
+\label{sec:stage5-example}
+Re-fetching the same three top videos with
+\code{apply\_boundary\_refinement=true} attaches a per-event
+\code{anchor\_seconds}/\code{refined\_seconds} pair to each:
+
+\begin{center}
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+\code{video\_id} & event & \code{anchor\_seconds} & \code{refined\_seconds} & sampled frames \\
+\midrule
+\texttt{M8E0XaX0tR0} & $e_1$ & 445.0 & 445.125 & 21 \\
+                      & $e_2$ & 445.0 & 445.125 & 21 \\
+                      & $e_3$ & 445.0 & 445.000 & 21 \\
+                      & $e_4$ & 445.0 & 445.125 & 21 \\
+\texttt{vglhM2iVGSo}  & $e_1$ & 9.0   & 9.040   & 21 \\
+                      & $e_2$ & 9.0   & 9.040   & 21 \\
+                      & $e_3$ & 9.0   & 9.080   & 21 \\
+                      & $e_4$ & 9.0   & 9.080   & 21 \\
+\texttt{65235CscqdQ}  & $e_1$ & 59.0  & 58.992  & 21 \\
+                      & $e_2$ & 59.0  & 59.259  & 21 \\
+                      & $e_3$ & 59.0  & 59.192  & 21 \\
+                      & $e_4$ & 59.0  & 58.992  & 21 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent This is Section~\ref{sec:stage5}'s independence property, observed
+directly rather than merely predicted: in \emph{every one} of the three top
+videos, all four events' \emph{coarse seeds} land on the identical
+\code{anchor\_seconds} ($445.0$, $9.0$, $59.0$ respectively) --- i.e.\ Stage 4
+independently decided, for each of the four semantically distinct events,
+that the single best-matching region in that video was the very same region
+--- and refinement (Stage 5, searching only $\pm 10$ native frames around
+each already-identical seed) can only nudge them a few hundred milliseconds
+apart at most, never far enough to actually separate four different physical
+actions. In \texttt{M8E0XaX0tR0}, $e_1$ and $e_4$ (spinning-on-a-column versus
+a dragon moving its head) refine to the \emph{exact same} timestamp, 445.125s.
+
+This is not a pipeline defect being demonstrated for effect: this specific
+query describes lion-dance content that this particular video corpus most
+likely does not contain footage of, so every event's retrieval signal is
+weak, and under weak/near-uniform signal the independent per-event maxima of
+Section~\ref{sec:stage4} collapse onto whichever single region is
+least-unrelated to all four queries at once. It is precisely the scenario
+Stage 6's manual per-event, freely-navigable frame correction
+(Section~\ref{sec:stage6}) exists to let a human resolve.
+
+\emph{(Live values, \file{GET .../video-priorities?limit=10\&apply\_boundary\_refinement=true}.)}

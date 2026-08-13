@@ -47,3 +47,15 @@ COMPARE_VIDEOS = "compare_videos"
 # Errors -------------------------------------------------------------------
 LAST_ERROR = "last_error"
 LAST_WARNING = "last_warning"
+
+# Search page (stateless one-shot search, separate from the adaptive session
+# mutation-flow keys above) --------------------------------------------------
+SEARCH_QUERY_TEXT = "search_query_text"
+SEARCH_PIPELINE = "search_pipeline"
+SEARCH_APPLY_REFINEMENT = "search_apply_refinement"
+SEARCH_APPLY_TUPLE_RANKING = "search_apply_tuple_ranking"
+SEARCH_RESULTS = "search_results"
+SEARCH_ERROR = "search_error"
+SEARCH_SESSION_ID = "search_session_id"
+SEARCH_EVENT_COUNT = "search_event_count"
+SEARCH_REJECTED_IDS = "search_rejected_ids"

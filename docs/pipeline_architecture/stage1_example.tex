@@ -1,0 +1,52 @@
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.05\textwidth}p{0.24\textwidth}p{0.30\textwidth}p{0.30\textwidth}@{}}
+\toprule
+& \textbf{anchor\_query} & \textbf{pre\_state} & \textbf{post\_state} \\
+\midrule
+$e_1$ & Múa lân lân bắt đầu xoay vòng trên cột số 4 bằng hai chân trước
+ & lân đứng trên cột số 4 chưa xoay vòng
+ & lân đang xoay vòng trên cột số 4 bằng hai chân trước \\
+$e_2$ & Múa lân lân 4 chân hoàn toàn chạm đất
+ & lân đang xoay vòng trên cột số 4
+ & lân đã tiếp đất với cả bốn chân chạm đất \\
+$e_3$ & Múa lân hai người biểu diễn lân cúi chào ban giám khảo
+ & hai người đứng trước khi cúi chào
+ & hai người cúi chào ban giám khảo \\
+$e_4$ & Múa lân con rồng cử động đầu
+ & con rồng đứng yên
+ & con rồng cử động đầu \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent All four events received \code{boundary\_type = onset} --- consistent
+with every event being phrased as ``khoảnh khắc đầu tiên \dots'' (``the first
+moment \dots''); this also matches the exact worked examples embedded in the
+rewrite system prompt itself (\file{src/rewrite/constants.py}, lines 92--100),
+which literally uses $e_4$'s ``dragon moves its head'' sentence as its own
+illustration of a correctly-classified \code{onset} target.
+
+Note the \code{anchor\_query} for $e_1$--$e_3$ begins with ``Múa lân'' (the
+common-query context term), confirming the standalone-context requirement of
+Section~2.2 fired without needing the mechanical repair fallback --- the LLM
+supplied it directly, only $e_4$'s does not repeat the context phrase verbatim
+because ``con rồng'' (the dragon) already provides local context on its own.
+
+Full four-variant retrieval set actually generated for $e_4$
+(\code{retrieval\_variants["evt3"]} in the raw session response):
+\begin{quote}\small
+\begin{tabular}{@{}ll@{}}
+VI\textsubscript{1} & Múa lân con rồng cử động đầu \\
+VI\textsubscript{2} & Múa lân rồng cử động đầu khi lân tiến lại chào \\
+EN\textsubscript{1} & The dragon moves its head during the lion dance \\
+EN\textsubscript{2} & Dragon's head moves when the lion approaches in the lion dance \\
+\end{tabular}
+\end{quote}
+Exactly 2 Vietnamese + 2 English variants, as the schema requires --- both
+Vietnamese variants are lexically distinct paraphrases of the same target
+moment, and both English variants translate that same moment rather than the
+setup clause about the lion approaching.
+
+\emph{(Live run: session \texttt{4453efe2-37f1-4bd6-8fe2-e5f2ead22945},
+rewrite latency 164.3s for this one batched 4-event call.)}

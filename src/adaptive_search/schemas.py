@@ -257,6 +257,69 @@ class RankingHyperparameters(StrictModel):
         return self
 
 
+class TupleRankingHyperparameters(StrictModel):
+    """Multi-region pooling + order-aware tuple video ranking - an opt-in
+    alternative to `prioritize_videos()`'s independent per-event max.
+
+    Validated against real YouCook2 queries, n=30
+    (irrelevant_things/benchmarks/youcook2/region_tuple_ranking_results.md):
+    +15% final_query_score over the production default (1.4667 -> 1.6867),
+    with the tail-recall regression an unconditional order bonus caused in
+    earlier rounds fixed by confidence-gating (only trust the order signal
+    when the underlying region scores are themselves strong) - verified by
+    reversing every one of the specific videos that regressed, not just in
+    aggregate. Defaults below are that report's winning configuration.
+    Still opt-in (`apply_tuple_ranking=false` by default on
+    `GET .../video-priorities`) pending validation at a larger sample size
+    than n=30.
+    """
+
+    absolute_threshold: UnitScore = 0.0
+    """alpha: a region must score >= this on normalized_coarse_score."""
+
+    relative_delta: NonNegativeFloat = 0.15
+    """delta: a region must score >= (event's best region score - delta)."""
+
+    max_regions_per_event: PositiveInt = 20
+    """N: cap on pooled regions per (event, video), best-score-first. Swept
+    up to N=200 with no further benefit found past N~5 on the benchmark
+    corpus - kept at the proposal's own suggested cap since it costs nothing
+    extra to allow.
+    """
+
+    order_weight: NonNegativeFloat = 0.8
+    """Weight of the (confidence-gated) order-agreement term added to a
+    tuple's mean region score."""
+
+    pooling: Literal["max", "mean"] = "max"
+    """How a video's kept tuples combine into one video score: "max" (best
+    tuple wins) or "mean" (average of up to max_tuples_per_video). "mean"
+    scored well alone in the benchmark but combined poorly with
+    confidence_gate - not used together in the winning configuration."""
+
+    confidence_gate: Literal["none", "linear", "threshold"] = "threshold"
+    """How `order_weight` is scaled by a tuple's own `region_mean_score`
+    before being applied - "none" (fixed order_weight, caused the tail-recall
+    regression), "linear" (order_weight * region_mean_score), or "threshold"
+    (order_weight if region_mean_score >= confidence_gate_threshold else 0 -
+    the winning choice)."""
+
+    confidence_gate_threshold: UnitScore = 0.5
+    """Only used when confidence_gate="threshold". Chosen from a 3-point
+    sweep (0.3/0.5/0.7); not a fine-grained optimum."""
+
+    max_combinations_per_video: PositiveInt = 20_000
+    """Hard cap on tuples explored per video during backtracking - a safety
+    valve against the N^event_count combinatorial blowup pooling many
+    regions across many events could otherwise cause. Search order is
+    best-region-first per event, so this cap truncates from the
+    least-promising end first."""
+
+    max_tuples_per_video: PositiveInt = 20
+    """How many top-scoring tuples per video to retain (only matters for
+    pooling="mean")."""
+
+
 class SearchHyperparameters(StrictModel):
     retrieval: RetrievalHyperparameters = Field(
         default_factory=RetrievalHyperparameters
@@ -271,6 +334,9 @@ class SearchHyperparameters(StrictModel):
         default_factory=BoundaryHyperparameters
     )
     ranking: RankingHyperparameters = Field(default_factory=RankingHyperparameters)
+    tuple_ranking: TupleRankingHyperparameters = Field(
+        default_factory=TupleRankingHyperparameters
+    )
 
 
 class EventDefinition(StrictModel):

@@ -1,0 +1,6 @@
+# Minimal brand identity so the app reads as a product, not default Streamlit
+# gray. Only the accent color and font are pinned; background/text colors are
+# left alone so Streamlit's own light/dark toggle keeps working normally.
+[theme]
+primaryColor = "#4F46E5"
+font = "sans serif"

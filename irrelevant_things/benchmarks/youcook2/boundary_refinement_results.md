@@ -5,7 +5,7 @@ Backend: `src/main.py` (port 8001) + real upstream sparse-search service (port 8
 
 ## Goal
 
-Test whether a cheap, post-hoc "boundary refinement" stage (local Β±10-native-frame sweep around
+Test whether a cheap, post-hoc "boundary refinement" stage (local ±10-native-frame sweep around
 an already-chosen anchor, scored with the existing pre/post-state change-point detector) measurably
 improves temporal precision for moment-oriented queries ("the first moment X happens" / "the last
 moment X happens"), across all three pre-`adaptive_full` pipelines: `legacy_temporal`,
@@ -67,11 +67,11 @@ Reuses the repo's existing boundary-detection machinery verbatim — `score_even
 anchor/pre-state/post-state cosine similarity), `calibrate_frame_scores()` (pairwise-softmax
 pre/post, robust-sigmoid anchor), `generate_boundary_proposals()` (the actual change-point detector:
 searches configured window sizes for the point that best separates a pre-state-like left side from a
-post-state-like right side) — applied to a **Β±10-native-frame sweep** (real per-video fps read from
+post-state-like right side) — applied to a **±10-native-frame sweep** (real per-video fps read from
 `{video_id}_keyframes.json`) around the single best-ranked anchor the pipeline produced, instead of
 the wide, expensive dense-sampled region `adaptive_full`'s live refinement normally scans.
 `window_options_seconds` was corrected from the schema default (0.5–3.0s — wider than the entire
-Β±0.33s sweep at ~30fps) to `(2,4,8)/fps` native-frame multiples, since a 1-native-frame window can
+±0.33s sweep at ~30fps) to `(2,4,8)/fps` native-frame multiples, since a 1-native-frame window can
 never satisfy the `min_samples_per_side=2` requirement.
 
 **Compute-saving optimization**: since refinement only relocates a timestamp *within* an
@@ -124,8 +124,8 @@ not trustworthy and are intentionally not reported as data points below, only na
 
 The results below reflect the final state after all four fixes (Fix 1 + 2 + the corrected version of
 3/4). An intermediate run with only Fix 1 plus the *original* (pre-region-based) seed selection showed
-`adaptive_coarse` hits improve from 106β†’112 in the "before" state (confirming Fix 1 alone helps) but
-"after" refinement still net-negative (112β†’105) — that run is not reported as a clean data point since
+`adaptive_coarse` hits improve from 106→112 in the "before" state (confirming Fix 1 alone helps) but
+"after" refinement still net-negative (112→105) — that run is not reported as a clean data point since
 it used the refinement implementation later found to have the step-3 bug.
 
 ### Metric: `recall@k_new`
@@ -166,15 +166,15 @@ not normalized to [0,1] — they range 0 to `event_count` (4) per query, since `
 un-normalized count of matching events.)
 
 **The "before" state improved meaningfully** from the fixes: `adaptive_coarse` total hits (across 240
-events) went 106β†’112, `legacy_temporal` 25β†’28, `legacy_ambiguous` 11β†’24 (Fix 1's clean retrieval text
+events) went 106→112, `legacy_temporal` 25→28, `legacy_ambiguous` 11→24 (Fix 1's clean retrieval text
 plus Fix 2's region-based, less-arbitrary anchor selection both help *before any refinement runs at
-all*). **The "after" state is still net-negative** in the final run too: `adaptive_coarse` 112β†’105,
-`legacy_ambiguous` 24β†’23, `legacy_temporal` flat 28β†’28. See Findings below for why — the mechanism is
+all*). **The "after" state is still net-negative** in the final run too: `adaptive_coarse` 112→105,
+`legacy_ambiguous` 24→23, `legacy_temporal` flat 28→28. See Findings below for why — the mechanism is
 different from (and better-understood than) the original run's.
 
 ## Transparency: coverage and refinement activity (final run)
 
-| pipeline | queries found (any rank) | found rank≀100 | total events | events refined | fallback (no proposal) |
+| pipeline | queries found (any rank) | found rank<=100 | total events | events refined | fallback (no proposal) |
 |---|---|---|---|---|---|
 | `legacy_temporal` | 22 / 60 | 18 / 60 | 240 | 72 | 0 |
 | `legacy_ambiguous` | 18 / 60 | 14 / 60 | 240 | 56 | 0 |
@@ -192,8 +192,8 @@ Video `0IuQKThr-pM`, `adaptive_coarse`, "first moment" variant (rank 20). With t
 
 | event | GT interval | before | after | before hit? | after hit? |
 |---|---|---|---|---|---|
-| E1 | [41.0, 53.0] | 51.00s | 51.12s | βœ“ | βœ“ |
-| E4 | [133.0, 140.0] | 134.00s | 134.13s | βœ“ | βœ“ |
+| E1 | [41.0, 53.0] | 51.00s | 51.12s | Y | Y |
+| E4 | [133.0, 140.0] | 134.00s | 134.13s | Y | Y |
 
 Both anchors land comfortably inside their windows, and refinement makes small, sensible adjustments
 without disturbing either hit — the fix to seed selection directly repaired the case that motivated
@@ -207,9 +207,9 @@ sub-second precision then nudges just past:
 
 | video | event | GT interval | before | after | before hit? | after hit? |
 |---|---|---|---|---|---|---|
-| `0_Ifseq4Eg8` | E1 | [30.0, 41.0] | 41.00s | 41.08s | βœ“ | βœ— |
-| `2vNPfc8LaTc` | E3 | [120.0, 132.0] | 132.00s | 132.06s | βœ“ | βœ— |
-| `1HK-p8abRq8` | E1 | [36.0, 39.0] | 36.00s | 35.90s | βœ“ | βœ— |
+| `0_Ifseq4Eg8` | E1 | [30.0, 41.0] | 41.00s | 41.08s | Y | N |
+| `2vNPfc8LaTc` | E3 | [120.0, 132.0] | 132.00s | 132.06s | Y | N |
+| `1HK-p8abRq8` | E1 | [36.0, 39.0] | 36.00s | 35.90s | Y | N |
 
 In every case the coarse anchor is exactly the GT interval's start or end second, and refinement moves
 it by well under 0.2s — a tiny, individually-reasonable adjustment that nonetheless crosses the
@@ -228,7 +228,7 @@ effects don't offset — producing exactly the small, consistent negative drift 
 1. **Fix 1 (clean retrieval text) and Fix 2 (region-based seed selection) both real, both verified,
    both improve the "before" state.** `adaptive_coarse`'s un-refined hit count rose from 106 to 112
    (across the same 240 events) purely from better anchor selection, no refinement involved.
-   `legacy_ambiguous` more than doubled (11β†’24) — the wrapped query text was disproportionately hurting
+   `legacy_ambiguous` more than doubled (11→24) — the wrapped query text was disproportionately hurting
    whichever legacy searcher doesn't preserve event order.
 
 2. **Refinement's own mechanism is now demonstrably correct** (the `0IuQKThr-pM` example above), fixing
@@ -238,8 +238,8 @@ effects don't offset — producing exactly the small, consistent negative drift 
    scores across independently-calibrated neighborhoods. Both are now understood precisely, not just
    patched over.
 
-3. **Despite that, the aggregate "after" state is still mildly negative** (`adaptive_coarse` 112β†’105,
-   `legacy_ambiguous` 24β†’23), and the reason is now precisely characterized (not merely "sweep radius
+3. **Despite that, the aggregate "after" state is still mildly negative** (`adaptive_coarse` 112→105,
+   `legacy_ambiguous` 24→23), and the reason is now precisely characterized (not merely "sweep radius
    too narrow," as the original report guessed): three independently-verified regressions all show the
    *same* boundary-edge-crossing mechanism, not scattered unrelated failures. This is evidence the
    remaining gap is a specific, addressable characteristic of comparing sub-second refinement against

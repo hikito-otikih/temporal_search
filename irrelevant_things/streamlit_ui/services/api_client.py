@@ -73,7 +73,12 @@ class ClientSettings:
     backend_url: str = "http://127.0.0.1:8001"
     upstream_url: str = "http://127.0.0.1:8000"
     connect_timeout: float = 5.0
-    read_timeout: float = 60.0
+    # GET /video-priorities and POST /temporal-search with
+    # apply_boundary_refinement=true do real per-event GPU decode+embed work
+    # that scales with result count - e.g. limit=50 with 3 events measured at
+    # ~65s. 60s was cutting off requests that were still correctly working,
+    # just slower than the client was willing to wait.
+    read_timeout: float = 240.0
     max_retries: int = 1
 
 
@@ -136,6 +141,7 @@ class TemporalApiClient:
         object_filter: bool = False,
         object_name_list: list[str] | None = None,
         object_threshold: float = 0.5,
+        apply_boundary_refinement: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "POST",
@@ -149,6 +155,7 @@ class TemporalApiClient:
                 "objectFilterMode": object_filter,
                 "object_name_list": object_name_list,
                 "objectThreshold": object_threshold,
+                "apply_boundary_refinement": apply_boundary_refinement,
             },
         )
 
@@ -174,6 +181,25 @@ class TemporalApiClient:
                 "hyperparameters": hyperparameters or {},
                 "constraints": constraints or {},
             },
+        )
+        return SessionResponse.model_validate(data)
+
+    def create_session_from_queries(
+        self,
+        *,
+        queries: list[str],
+        common_query: str | None = None,
+    ) -> SessionResponse:
+        """LLM-rewrite based session creation: one input string per event, in order.
+
+        The rewrite step enriches each line into a full event definition
+        (anchor_query, pre_state, post_state, boundary_type, retrieval
+        variants) - it does not split one line into multiple events.
+        """
+        data = self._request(
+            "POST",
+            "/v1/search-sessions/from-queries",
+            json={"query": queries, "common_query": common_query},
         )
         return SessionResponse.model_validate(data)
 
@@ -270,6 +296,20 @@ class TemporalApiClient:
         )
         return RunResponse.model_validate(data)
 
+    def retrieve_session(
+        self,
+        session_id: str,
+        *,
+        top_k: int = 50,
+        event_ids: list[str] | None = None,
+    ) -> RunResponse:
+        data = self._request(
+            "POST",
+            f"/v1/search-sessions/{session_id}/commands/retrieve",
+            json={"top_k": top_k, "event_ids": event_ids},
+        )
+        return RunResponse.model_validate(data)
+
     def mark_videos(
         self,
         session_id: str,
@@ -346,6 +386,24 @@ class TemporalApiClient:
     # Read-only artifact paging
     # ------------------------------------------------------------------
 
+    def get_frame_preview(
+        self,
+        video_id: str,
+        *,
+        anchor_seconds: float,
+        radius_frames: int = 15,
+        stride: int = 1,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/v1/media/{video_id}/frame-preview",
+            params={
+                "anchor_seconds": anchor_seconds,
+                "radius_frames": radius_frames,
+                "stride": stride,
+            },
+        )
+
     def get_regions(
         self,
         session_id: str,
@@ -383,6 +441,26 @@ class TemporalApiClient:
                 "video_id": video_id,
                 "offset": offset,
                 "limit": limit,
+            },
+        )
+
+    def get_video_priorities(
+        self,
+        session_id: str,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+        apply_boundary_refinement: bool = True,
+        apply_tuple_ranking: bool = False,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={
+                "offset": offset,
+                "limit": limit,
+                "apply_boundary_refinement": apply_boundary_refinement,
+                "apply_tuple_ranking": apply_tuple_ranking,
             },
         )
 

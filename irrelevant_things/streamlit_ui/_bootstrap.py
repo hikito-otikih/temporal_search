@@ -29,36 +29,46 @@ def _project_root() -> Path:
 
 
 def bootstrap() -> None:
-    st.set_page_config(page_title="Temporal Search Console", layout="wide")
-    SS.init_ui_state(st.session_state)
+    st.set_page_config(page_title="Temporal Search", page_icon=":material/search:", layout="wide")
 
-    if not st.session_state.get(K.BACKEND_URL):
+    # Must run before init_ui_state(): that function unconditionally seeds
+    # these same four keys with hardcoded defaults for any key not yet in
+    # session_state, which on a session's first page load is all of them -
+    # so if it ran first, the `.env` values below would never be read (the
+    # keys would already be truthy from the hardcoded defaults). Using
+    # `not in` rather than falsy-checking also means an explicit empty
+    # string a user enters in the sidebar (e.g. to clear the media root)
+    # sticks, instead of being treated as unset and re-defaulted.
+    if K.BACKEND_URL not in st.session_state:
         st.session_state[K.BACKEND_URL] = os.getenv(
             "BACKEND_URL", "http://127.0.0.1:8001"
         )
-    if not st.session_state.get(K.UPSTREAM_URL):
+    if K.UPSTREAM_URL not in st.session_state:
         st.session_state[K.UPSTREAM_URL] = os.getenv(
             "UPSTREAM_URL", "http://127.0.0.1:8000"
         )
-    if not st.session_state.get(K.MEDIA_ROOT):
+    if K.MEDIA_ROOT not in st.session_state:
         st.session_state[K.MEDIA_ROOT] = os.getenv("MEDIA_ROOT", "")
-    if not st.session_state.get(K.WORKSPACE):
+    if K.WORKSPACE not in st.session_state:
         st.session_state[K.WORKSPACE] = os.getenv("WORKSPACE", "default")
+
+    SS.init_ui_state(st.session_state)
 
 
 def configure_sidebar() -> None:
-    st.session_state[K.BACKEND_URL] = st.sidebar.text_input(
-        "Backend URL", value=str(st.session_state.get(K.BACKEND_URL, ""))
-    )
-    st.session_state[K.UPSTREAM_URL] = st.sidebar.text_input(
-        "Upstream URL", value=str(st.session_state.get(K.UPSTREAM_URL, ""))
-    )
-    st.session_state[K.MEDIA_ROOT] = st.sidebar.text_input(
-        "Media root", value=str(st.session_state.get(K.MEDIA_ROOT, ""))
-    )
-    st.session_state[K.WORKSPACE] = st.sidebar.text_input(
-        "Workspace", value=str(st.session_state.get(K.WORKSPACE, ""))
-    )
+    with st.sidebar.expander("Connection settings"):
+        st.session_state[K.BACKEND_URL] = st.text_input(
+            "Backend URL", value=str(st.session_state.get(K.BACKEND_URL, ""))
+        )
+        st.session_state[K.UPSTREAM_URL] = st.text_input(
+            "Upstream URL", value=str(st.session_state.get(K.UPSTREAM_URL, ""))
+        )
+        st.session_state[K.MEDIA_ROOT] = st.text_input(
+            "Media root", value=str(st.session_state.get(K.MEDIA_ROOT, ""))
+        )
+        st.session_state[K.WORKSPACE] = st.text_input(
+            "Workspace", value=str(st.session_state.get(K.WORKSPACE, ""))
+        )
 
 
 def get_api_client() -> TemporalApiClient:

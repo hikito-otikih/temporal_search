@@ -1,0 +1,22 @@
+Retrieving with \code{top\_k=50} per variant against the live upstream
+service and fusing per Eq.~\ref{eq:rrf} produced, across all four events:
+
+\begin{center}
+\begin{tabular}{@{}lr@{}}
+\toprule
+Quantity & Count \\
+\midrule
+Raw candidates in ($4$ events $\times$ $4$ variants $\times$ up to $50$ each) & 800 \\
+Fused candidates out (post-RRF, post-dedup, per-event caps applied) & 353 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Neither per-event cap (\code{top\_n\_per\_variant}=500,
+\code{top\_n\_fused}=1000) was binding at \code{top\_k=50}; the reduction
+from 800 to 353 here is entirely from Eq.~\ref{eq:rrf}'s
+frame-level deduplication (the same physical frame recurring across two or
+more of a given event's four query variants collapses to one fused row).
+
+\emph{(Run metrics, verbatim: \code{input\_candidates: 800, fused\_candidates:
+353}, \file{commands/retrieve} response.)}
