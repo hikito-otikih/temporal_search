@@ -310,6 +310,39 @@ def load_query_directory_grouped(path: str | Path) -> list[VideoQueryGroup]:
     return groups
 
 
+def legacy_event_timestamps(
+    group: VideoQueryGroup, frames: Sequence[Mapping[str, Any]]
+) -> dict[str, float]:
+    """Map a matched legacy tuple's frames back to event ids via `query_id` position."""
+
+    timestamps: dict[str, float] = {}
+    for frame in frames:
+        position = frame.get("query_id")
+        raw_timestamp = frame.get("timestamp")
+        if position is None or raw_timestamp is None:
+            continue
+        index = int(position)
+        if not 0 <= index < len(group.events):
+            continue
+        timestamps[group.events[index][0]] = parse_timestamp(str(raw_timestamp))
+    return timestamps
+
+
+def event_timestamp_accuracy(
+    group: VideoQueryGroup, event_timestamps: Mapping[str, float]
+) -> dict[str, bool]:
+    """Does each event's matched frame timestamp fall inside its GT interval?"""
+
+    accuracy: dict[str, bool] = {}
+    for event_id, timestamp in event_timestamps.items():
+        answer = group.answers.get(event_id)
+        if answer is None:
+            continue
+        start, end = answer
+        accuracy[event_id] = start <= timestamp <= end
+    return accuracy
+
+
 def _record_from_mapping(row: Mapping[str, Any], source: str, row_number: int) -> QueryRecord:
     query_id = row.get("query_id") or row.get("id")
     query_text = row.get("query_text") or row.get("query") or row.get("text")

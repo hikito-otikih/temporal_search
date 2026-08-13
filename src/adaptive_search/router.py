@@ -35,8 +35,8 @@ from .constants import (
 )
 from .dependencies import (
     adaptive_service,
-    configure_live_refinement_runtime,
-    live_refinement_orchestrator,
+    boundary_refinement_runtime,
+    configure_boundary_refinement_runtime,
     upstream_search_client,
 )
 from .embedding import (
@@ -54,6 +54,9 @@ from .exceptions import (
     UpstreamSearchError,
 )
 from .algorithms import prioritize_videos
+from .boundary_refinement import refine_event_boundary
+from .boundary_seeds import select_event_seeds
+from .providers import VideoAssetNotFoundError
 from .schemas import (
     BoundaryType,
     EventDefinition,
@@ -71,8 +74,8 @@ router = APIRouter(prefix=ROUTER_PREFIX, tags=ROUTER_TAGS)
 
 
 @router.on_event("startup")
-def _configure_live_refinement_runtime() -> None:
-    configure_live_refinement_runtime()
+def _configure_boundary_refinement_runtime() -> None:
+    configure_boundary_refinement_runtime()
 
 
 class ApiModel(BaseModel):
@@ -141,12 +144,6 @@ class RetrieveSessionRequest(ApiModel):
     event_ids: list[str] | None = Field(default=None, min_length=1)
 
 
-class RefineSessionRequest(ApiModel):
-    expected_revision: int = Field(ge=0)
-    region_ids: list[str] | None = Field(default=None, min_length=1)
-    max_frames: int | None = Field(default=None, gt=0)
-
-
 class MarkVideosRequest(ApiModel):
     expected_revision: int = Field(ge=0)
     video_ids: list[str]
@@ -204,7 +201,7 @@ class RunResponse(ApiModel):
 
 @router.get("/searchers")
 def list_searchers():
-    capability = live_refinement_orchestrator.capabilities()
+    capability = boundary_refinement_runtime.capabilities()
     return {
         "searchers": [
             {
@@ -400,27 +397,6 @@ def ingest_frame_scores(session_id: str, request: FrameScoreIngestRequest):
 
 
 @router.post(
-    "/search-sessions/{session_id}/commands/refine",
-    response_model=RunResponse,
-)
-def refine_session(session_id: str, request: RefineSessionRequest):
-    try:
-        result = live_refinement_orchestrator.refine_session(
-            session_id,
-            expected_revision=request.expected_revision,
-            region_ids=request.region_ids,
-            max_frames=request.max_frames,
-        )
-        return _run_response(
-            result.bundle,
-            result.run,
-            metrics=result.metrics,
-        )
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.post(
     "/search-sessions/{session_id}/commands/retrieve",
     response_model=RunResponse,
 )
@@ -576,6 +552,7 @@ def get_video_priorities(
     session_id: str,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
+    apply_boundary_refinement: bool = Query(default=True),
 ):
     try:
         bundle = adaptive_service.get_session(session_id)
@@ -585,9 +562,113 @@ def get_video_priorities(
             bundle.session.hyperparameters.refinement,
             bundle.session.constraints,
         )
-        return _page(priorities, offset, limit)
+        page = priorities[offset : offset + limit]
+
+        capability_available = False
+        capability_reason: str | None = None
+        if apply_boundary_refinement:
+            capability = boundary_refinement_runtime.capabilities()
+            capability_available = capability.available
+            capability_reason = capability.reason
+
+        candidates_by_id = {c.id: c for c in bundle.artifacts.candidates}
+        items = [
+            _video_priority_with_boundary_refinement(
+                priority,
+                bundle=bundle,
+                candidates_by_id=candidates_by_id,
+                requested=apply_boundary_refinement,
+                capability_available=capability_available,
+                capability_reason=capability_reason,
+            )
+            for priority in page
+        ]
+        return {
+            "items": items,
+            "total": len(priorities),
+            "offset": offset,
+            "limit": limit,
+            "boundary_refinement_capability": {
+                "requested": apply_boundary_refinement,
+                "available": capability_available,
+                "reason": capability_reason,
+            },
+        }
     except Exception as exc:
         _raise_api_error(exc)
+
+
+def _video_priority_with_boundary_refinement(
+    priority,
+    *,
+    bundle,
+    candidates_by_id: dict[str, SparseCandidate],
+    requested: bool,
+    capability_available: bool,
+    capability_reason: str | None,
+) -> dict[str, Any]:
+    payload = priority.model_dump(mode="json")
+    if not requested:
+        payload["boundary_refinement"] = {"status": "not_requested", "events": None}
+        return payload
+    if not capability_available:
+        payload["boundary_refinement"] = {
+            "status": "skipped_runtime_unavailable",
+            "events": None,
+        }
+        return payload
+
+    metadata = boundary_refinement_runtime.frame_provider.catalog.metadata(priority.video_id)
+    if metadata is None or metadata.fps is None:
+        payload["boundary_refinement"] = {"status": "skipped_no_metadata", "events": None}
+        return payload
+
+    events_out: list[dict[str, Any]] = []
+    for event in bundle.session.events:
+        seeds = select_event_seeds(
+            regions=bundle.artifacts.regions,
+            candidates_by_id=candidates_by_id,
+            event_id=event.event_id,
+            video_id=priority.video_id,
+        )
+        if not seeds:
+            continue
+        anchor_seconds = seeds[0]
+        try:
+            outcome = refine_event_boundary(
+                provider=boundary_refinement_runtime.frame_provider,
+                embedder=boundary_refinement_runtime.embedder,
+                video_id=priority.video_id,
+                event_id=event.event_id,
+                anchor_query=event.anchor_query,
+                pre_state=event.pre_state,
+                post_state=event.post_state,
+                boundary_type=event.boundary_type,
+                anchor_seconds=anchor_seconds,
+                fps=metadata.fps,
+                duration_ms=metadata.duration_ms,
+            )
+        except VideoAssetNotFoundError:
+            payload["boundary_refinement"] = {
+                "status": "skipped_video_not_in_catalog",
+                "events": None,
+            }
+            return payload
+        events_out.append(
+            {
+                "event_id": event.event_id,
+                "anchor_seconds": outcome.anchor_seconds,
+                "refined_seconds": outcome.refined_seconds,
+                "used_fallback": outcome.used_fallback,
+                "boundary_type": event.boundary_type,
+                "sampled_frame_count": outcome.sampled_frame_count,
+            }
+        )
+    payload["boundary_refinement"] = {
+        "status": "applied" if events_out else "skipped_no_metadata",
+        "events": events_out or None,
+    }
+    return payload
 
 
 @router.get("/search-sessions/{session_id}/frame-scores")
@@ -609,19 +690,6 @@ def get_frame_scores(
             and (region_id is None or item.region_id == region_id)
         ]
         return _page(items, offset, limit)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.get("/search-sessions/{session_id}/tuples")
-def get_tuples(
-    session_id: str,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=20, ge=1, le=200),
-):
-    try:
-        bundle = adaptive_service.get_session(session_id)
-        return _page(bundle.artifacts.tuples, offset, limit)
     except Exception as exc:
         _raise_api_error(exc)
 
@@ -650,7 +718,7 @@ def _session_response(bundle: SessionBundle) -> SessionResponse:
         session=bundle.session,
         artifact_counts=_counts(bundle),
         live_refinement=asdict(
-            live_refinement_orchestrator.capabilities(runtime_spec)
+            boundary_refinement_runtime.capabilities(runtime_spec)
         ),
     )
 
@@ -660,7 +728,7 @@ def _apply_runtime_embedding_default(
 ) -> SearchHyperparameters:
     if "embedding_model" in hyperparameters.refinement.model_fields_set:
         return hyperparameters
-    runtime_spec = live_refinement_orchestrator.configured_runtime_spec()
+    runtime_spec = boundary_refinement_runtime.configured_runtime_spec()
     if runtime_spec is None:
         return hyperparameters
     return hyperparameters.model_copy(

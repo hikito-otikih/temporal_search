@@ -20,7 +20,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
-from .core import VideoQueryGroup, canonical_video_id, compute_metrics, parse_timestamp
+from .core import (
+    VideoQueryGroup,
+    canonical_video_id,
+    compute_metrics,
+    event_timestamp_accuracy,
+    legacy_event_timestamps,
+)
 from .runner import (
     _append_checkpoint,
     _atomic_json,
@@ -66,6 +72,29 @@ class TupleRunConfig:
     # Raise this if you want e.g. Recall@50 to mean anything. None keeps
     # the server's own default.
     adaptive_ranking_top_k: int | None = None
+    # hyperparameters.retrieval overrides (None keeps the server's own
+    # default for that field). top_n_per_variant/top_n_fused/rrf_k feed
+    # fuse_candidates_rrf(); apply to both adaptive_coarse and adaptive_full
+    # since both go through the same retrieval stage.
+    adaptive_top_n_per_variant: int | None = None
+    adaptive_top_n_fused: int | None = None
+    adaptive_rrf_k: int | None = None
+    # hyperparameters.refinement overrides. The three weights feed
+    # prioritize_videos() (used by adaptive_coarse's ranking directly, and
+    # by adaptive_full's select_refinement_frontier() to pick which videos
+    # get dense-refined at all). max_initial_videos/max_total_regions/
+    # max_regions_per_event_per_video only affect adaptive_full's frontier
+    # width - adaptive_coarse ranks every formed region regardless.
+    adaptive_video_coverage_weight: float | None = None
+    adaptive_video_mean_weight: float | None = None
+    adaptive_video_min_weight: float | None = None
+    adaptive_max_initial_videos: int | None = None
+    adaptive_max_total_regions: int | None = None
+    adaptive_max_regions_per_event_per_video: int | None = None
+    # The session-level ceiling commands/refine's own max_frames (above) is
+    # not allowed to exceed - a distinct knob from --adaptive-max-frames,
+    # which is the per-command request, not the session's own hard limit.
+    adaptive_max_frames_per_run: int | None = None
 
 
 def source_fingerprint(source_path: Path) -> tuple[str, int]:
@@ -113,28 +142,51 @@ def _build_event_payload(group: VideoQueryGroup) -> list[dict[str, Any]]:
     ]
 
 
-def _adaptive_hyperparameters(config: TupleRunConfig) -> dict[str, Any] | None:
-    if config.adaptive_ranking_top_k is None:
-        return None
-    return {"ranking": {"top_k": config.adaptive_ranking_top_k}}
+def _adaptive_hyperparameters(
+    config: TupleRunConfig, *, include_ranking: bool
+) -> dict[str, Any] | None:
+    """Build a session hyperparameters override, or None to send nothing.
 
+    ``include_ranking`` gates ``ranking.top_k`` specifically: adaptive_full
+    reads it directly, but adaptive_coarse's ranking never consults it (that
+    pipeline's --adaptive-ranking-top-k instead caps the video-priorities
+    page via a query param) - sending it there would be a silently-unused
+    field on the stored session, misleading anyone reading it back.
+    """
 
-def _legacy_event_timestamps(
-    group: VideoQueryGroup, frames: Sequence[Mapping[str, Any]]
-) -> dict[str, float]:
-    """Map a matched legacy tuple's frames back to event ids via `query_id` position."""
-
-    timestamps: dict[str, float] = {}
-    for frame in frames:
-        position = frame.get("query_id")
-        raw_timestamp = frame.get("timestamp")
-        if position is None or raw_timestamp is None:
-            continue
-        index = int(position)
-        if not 0 <= index < len(group.events):
-            continue
-        timestamps[group.events[index][0]] = parse_timestamp(str(raw_timestamp))
-    return timestamps
+    retrieval = {
+        key: value
+        for key, value in (
+            ("top_n_per_variant", config.adaptive_top_n_per_variant),
+            ("top_n_fused", config.adaptive_top_n_fused),
+            ("rrf_k", config.adaptive_rrf_k),
+        )
+        if value is not None
+    }
+    refinement = {
+        key: value
+        for key, value in (
+            ("video_coverage_weight", config.adaptive_video_coverage_weight),
+            ("video_mean_weight", config.adaptive_video_mean_weight),
+            ("video_min_weight", config.adaptive_video_min_weight),
+            ("max_initial_videos", config.adaptive_max_initial_videos),
+            ("max_total_regions", config.adaptive_max_total_regions),
+            (
+                "max_regions_per_event_per_video",
+                config.adaptive_max_regions_per_event_per_video,
+            ),
+            ("max_frames_per_run", config.adaptive_max_frames_per_run),
+        )
+        if value is not None
+    }
+    hyperparameters: dict[str, Any] = {}
+    if retrieval:
+        hyperparameters["retrieval"] = retrieval
+    if refinement:
+        hyperparameters["refinement"] = refinement
+    if include_ranking and config.adaptive_ranking_top_k is not None:
+        hyperparameters["ranking"] = {"top_k": config.adaptive_ranking_top_k}
+    return hyperparameters or None
 
 
 def _adaptive_event_timestamps(tuple_item: Mapping[str, Any]) -> dict[str, float]:
@@ -142,24 +194,6 @@ def _adaptive_event_timestamps(tuple_item: Mapping[str, Any]) -> dict[str, float
         str(proposal["event_id"]): float(proposal["timestamp_seconds"])
         for proposal in tuple_item.get("proposals", [])
     }
-
-
-def _event_timestamp_accuracy(
-    group: VideoQueryGroup, event_timestamps: Mapping[str, float]
-) -> dict[str, bool]:
-    """Cheap diagnostic: does each event's matched frame fall in its GT interval?
-
-    Does not gate the primary video-id-rank metric - just recorded alongside it.
-    """
-
-    accuracy: dict[str, bool] = {}
-    for event_id, timestamp in event_timestamps.items():
-        answer = group.answers.get(event_id)
-        if answer is None:
-            continue
-        start, end = answer
-        accuracy[event_id] = start <= timestamp <= end
-    return accuracy
 
 
 def _rank_of_video(items: Sequence[Mapping[str, Any]], video_key: str, target: str) -> int | None:
@@ -193,8 +227,8 @@ def _run_legacy(
         "top_score": results[0].score if results else None,
     }
     if matched_frames is not None:
-        row["event_timestamp_accuracy"] = _event_timestamp_accuracy(
-            group, _legacy_event_timestamps(group, matched_frames)
+        row["event_timestamp_accuracy"] = event_timestamp_accuracy(
+            group, legacy_event_timestamps(group, matched_frames)
         )
     return row
 
@@ -202,7 +236,10 @@ def _run_legacy(
 def _run_adaptive_coarse(
     backend: TemporalSearchBackendClient, group: VideoQueryGroup, config: TupleRunConfig
 ) -> dict[str, Any]:
-    session_id = backend.create_adaptive_session(_build_event_payload(group))
+    session_id = backend.create_adaptive_session(
+        _build_event_payload(group),
+        hyperparameters=_adaptive_hyperparameters(config, include_ranking=False),
+    )
     backend.retrieve(session_id, top_k=config.adaptive_top_k)
     priorities = backend.get_video_priorities(session_id, limit=config.adaptive_ranking_top_k)
     rank = _rank_of_video(priorities, "video_id", group.video_id)
@@ -219,7 +256,8 @@ def _run_adaptive_full(
     backend: TemporalSearchBackendClient, group: VideoQueryGroup, config: TupleRunConfig
 ) -> dict[str, Any]:
     session_id = backend.create_adaptive_session(
-        _build_event_payload(group), hyperparameters=_adaptive_hyperparameters(config)
+        _build_event_payload(group),
+        hyperparameters=_adaptive_hyperparameters(config, include_ranking=True),
     )
     revision = backend.retrieve(session_id, top_k=config.adaptive_top_k)
     outcome = backend.refine(
@@ -249,7 +287,7 @@ def _run_adaptive_full(
         "top_score": tuples[0].get("normalized_final_score") if tuples else None,
     }
     if matched_tuple is not None:
-        row["event_timestamp_accuracy"] = _event_timestamp_accuracy(
+        row["event_timestamp_accuracy"] = event_timestamp_accuracy(
             group, _adaptive_event_timestamps(matched_tuple)
         )
     return row

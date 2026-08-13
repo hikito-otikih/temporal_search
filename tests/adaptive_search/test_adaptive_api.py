@@ -224,15 +224,12 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         counts = response.json()["artifact_counts"]
         self.assertGreater(counts["proposals"], 0)
+        # bundle.artifacts.tuples still gets populated by artifacts/frame-scores
+        # (assemble_ordered_tuples is intentionally kept - fix_frame also relies
+        # on it - only the GET /tuples HTTP surface was removed alongside
+        # commands/refine), so the count is still checkable; there's just no
+        # remaining HTTP endpoint to read the tuples' own content back.
         self.assertGreater(counts["tuples"], 0)
-
-        tuples = self.client.get(
-            f"/v1/search-sessions/{session_id}/tuples"
-        ).json()["items"]
-        self.assertEqual(
-            [item["event_id"] for item in tuples[0]["proposals"]],
-            ["e1", "e2"],
-        )
 
         response = self.client.patch(
             f"/v1/search-sessions/{session_id}/hyperparameters",

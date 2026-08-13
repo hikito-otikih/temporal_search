@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from adaptive_search.refinement import LiveRefinementOrchestrator
+from adaptive_search.refinement_runtime import BoundaryRefinementRuntime
 from adaptive_search.schemas import RefinementHyperparameters
 from adaptive_search.config import (
     LazySiglip2Embedder,
@@ -49,7 +49,7 @@ class AdaptiveRuntimeTests(unittest.TestCase):
     def test_configuration_leaves_default_provider_when_root_is_absent(self):
         service = AdaptiveSearchService()
         original = service.frame_provider
-        refiner = LiveRefinementOrchestrator(service)
+        refiner = BoundaryRefinementRuntime()
         with patch.dict(os.environ, {}, clear=True):
             runtime = configure_from_environment(service, refiner)
         self.assertIs(service.frame_provider, original)

@@ -176,6 +176,84 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         ),
     )
     tuple_run.add_argument(
+        "--adaptive-top-n-per-variant",
+        type=int,
+        default=defaults.get("adaptive_top_n_per_variant"),
+        help=(
+            "hyperparameters.retrieval.top_n_per_variant - truncates each query "
+            "variant's fused-candidate input after --adaptive-top-k's raw upstream "
+            "fetch (server default 200). Only binds if --adaptive-top-k is larger."
+        ),
+    )
+    tuple_run.add_argument(
+        "--adaptive-top-n-fused",
+        type=int,
+        default=defaults.get("adaptive_top_n_fused"),
+        help="hyperparameters.retrieval.top_n_fused - cap on RRF-fused candidates per event, across every candidate video combined (server default 500).",
+    )
+    tuple_run.add_argument(
+        "--adaptive-rrf-k",
+        type=int,
+        default=defaults.get("adaptive_rrf_k"),
+        help="hyperparameters.retrieval.rrf_k - the RRF fusion constant (server default 60).",
+    )
+    tuple_run.add_argument(
+        "--adaptive-video-coverage-weight",
+        type=float,
+        default=defaults.get("adaptive_video_coverage_weight"),
+        help="hyperparameters.refinement.video_coverage_weight for prioritize_videos() (server default 0.5).",
+    )
+    tuple_run.add_argument(
+        "--adaptive-video-mean-weight",
+        type=float,
+        default=defaults.get("adaptive_video_mean_weight"),
+        help="hyperparameters.refinement.video_mean_weight for prioritize_videos() (server default 0.3).",
+    )
+    tuple_run.add_argument(
+        "--adaptive-video-min-weight",
+        type=float,
+        default=defaults.get("adaptive_video_min_weight"),
+        help="hyperparameters.refinement.video_min_weight for prioritize_videos() (server default 0.2).",
+    )
+    tuple_run.add_argument(
+        "--adaptive-max-initial-videos",
+        type=int,
+        default=defaults.get("adaptive_max_initial_videos"),
+        help=(
+            "hyperparameters.refinement.max_initial_videos - how many coarse-ranked "
+            "videos get full multi-region frontier coverage in adaptive_full "
+            "(server default 100). No effect on adaptive_coarse."
+        ),
+    )
+    tuple_run.add_argument(
+        "--adaptive-max-total-regions",
+        type=int,
+        default=defaults.get("adaptive_max_total_regions"),
+        help=(
+            "hyperparameters.refinement.max_total_regions - the actual budget "
+            "bottleneck behind --adaptive-max-initial-videos in adaptive_full; "
+            "raising videos without raising this does little. No effect on "
+            "adaptive_coarse."
+        ),
+    )
+    tuple_run.add_argument(
+        "--adaptive-max-regions-per-event",
+        type=int,
+        default=defaults.get("adaptive_max_regions_per_event_per_video"),
+        help="hyperparameters.refinement.max_regions_per_event_per_video for adaptive_full's frontier. No effect on adaptive_coarse.",
+    )
+    tuple_run.add_argument(
+        "--adaptive-max-frames-per-run",
+        type=int,
+        default=defaults.get("adaptive_max_frames_per_run"),
+        help=(
+            "hyperparameters.refinement.max_frames_per_run - the session's own "
+            "hard ceiling that --adaptive-max-frames (commands/refine's request) "
+            "is not allowed to exceed. Raise this alongside --adaptive-max-frames, "
+            "not instead of it - they are different knobs."
+        ),
+    )
+    tuple_run.add_argument(
         "--recall-k", type=_csv_ints, default=_csv_ints(defaults.get("recall_k", "1,5,10,20,50"))
     )
     tuple_run.add_argument("--output-dir", default=defaults.get("output_dir"))
@@ -302,6 +380,16 @@ def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         retry_backoff_seconds=args.retry_backoff,
         adaptive_max_frames=args.adaptive_max_frames,
         adaptive_ranking_top_k=args.adaptive_ranking_top_k,
+        adaptive_top_n_per_variant=args.adaptive_top_n_per_variant,
+        adaptive_top_n_fused=args.adaptive_top_n_fused,
+        adaptive_rrf_k=args.adaptive_rrf_k,
+        adaptive_video_coverage_weight=args.adaptive_video_coverage_weight,
+        adaptive_video_mean_weight=args.adaptive_video_mean_weight,
+        adaptive_video_min_weight=args.adaptive_video_min_weight,
+        adaptive_max_initial_videos=args.adaptive_max_initial_videos,
+        adaptive_max_total_regions=args.adaptive_max_total_regions,
+        adaptive_max_regions_per_event_per_video=args.adaptive_max_regions_per_event,
+        adaptive_max_frames_per_run=args.adaptive_max_frames_per_run,
     )
     metrics, _ = run_tuple_benchmark(
         groups=groups,

@@ -23,7 +23,7 @@ from .embedding import (
     is_immutable_hf_commit,
 )
 from .providers import FrameProvider, YouCook2FrameProvider
-from .refinement import LiveRefinementOrchestrator
+from .refinement_runtime import BoundaryRefinementRuntime
 from .service import AdaptiveSearchService
 
 
@@ -163,10 +163,11 @@ def runtime_from_environment() -> RuntimeConfiguration:
 
 def configure_from_environment(
     service: AdaptiveSearchService,
-    refiner: LiveRefinementOrchestrator,
+    refiner: BoundaryRefinementRuntime,
 ) -> RuntimeConfiguration:
     configuration = runtime_from_environment()
     if configuration.frame_provider is not None:
         service.frame_provider = configuration.frame_provider
+        refiner.frame_provider = configuration.frame_provider
     refiner.embedder = configuration.embedder
     return configuration

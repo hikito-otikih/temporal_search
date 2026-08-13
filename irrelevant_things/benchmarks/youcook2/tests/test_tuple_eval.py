@@ -284,6 +284,62 @@ class TupleRunnerTests(unittest.TestCase):
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
         self.assertEqual(query["limit"], ["250"])
 
+    def test_adaptive_coarse_sends_retrieval_and_refinement_overrides(self) -> None:
+        group = self._group()
+        with tempfile.TemporaryDirectory() as output_dir:
+            run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config(
+                    "adaptive_coarse",
+                    adaptive_top_n_fused=500,
+                    adaptive_video_mean_weight=1.0,
+                    adaptive_video_coverage_weight=0.0,
+                    adaptive_video_min_weight=0.0,
+                ),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        payload = next(
+            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
+        )
+        self.assertEqual(payload["hyperparameters"]["retrieval"], {"top_n_fused": 500})
+        self.assertEqual(
+            payload["hyperparameters"]["refinement"],
+            {
+                "video_mean_weight": 1.0,
+                "video_coverage_weight": 0.0,
+                "video_min_weight": 0.0,
+            },
+        )
+        self.assertNotIn("ranking", payload["hyperparameters"])
+
+    def test_adaptive_full_sends_frontier_overrides_alongside_ranking(self) -> None:
+        group = self._group()
+        with tempfile.TemporaryDirectory() as output_dir:
+            run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config(
+                    "adaptive_full",
+                    adaptive_ranking_top_k=50,
+                    adaptive_max_initial_videos=20,
+                    adaptive_max_total_regions=300,
+                ),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        payload = next(
+            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
+        )
+        self.assertEqual(payload["hyperparameters"]["ranking"], {"top_k": 50})
+        self.assertEqual(
+            payload["hyperparameters"]["refinement"],
+            {"max_initial_videos": 20, "max_total_regions": 300},
+        )
+
     def test_adaptive_coarse_does_not_send_ranking_hyperparameters(self) -> None:
         group = self._group()
         with tempfile.TemporaryDirectory() as output_dir:

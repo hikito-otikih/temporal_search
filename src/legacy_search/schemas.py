@@ -7,12 +7,23 @@ NonEmptyQuery = Annotated[
 ]
 
 
+BoundaryRefinementStatus = Literal[
+    "applied",
+    "skipped_runtime_unavailable",
+    "skipped_no_metadata",
+    "skipped_video_not_in_catalog",
+    "not_requested",
+]
+
+
 class ClusteredCandidate(BaseModel):
     frame_index: int
     timestamp: str
     score: float
     query_id: Optional[int] = None
     satisfiedObjects: Optional[bool] = None
+    refined_timestamp_seconds: Optional[float] = None
+    boundary_refinement_status: Optional[BoundaryRefinementStatus] = None
 
 
 class Videos(BaseModel):
@@ -45,3 +56,4 @@ class TemporalSearchRequest(BaseModel):
     objectFilterMode: bool = False
     object_name_list: Optional[list[str]] = None
     objectThreshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    apply_boundary_refinement: bool = False

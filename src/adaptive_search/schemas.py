@@ -20,7 +20,7 @@ PositiveFloat = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
 Seconds = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
-FrameRunBudget = Annotated[int, Field(gt=0, le=4096)]
+FrameRunBudget = Annotated[int, Field(gt=0, le=100_000)]
 EmbeddingBatchSize = Annotated[int, Field(gt=0, le=512)]
 
 
@@ -102,8 +102,12 @@ def _quality_reranker_model() -> ModelRuntimeSpec:
 
 
 class RetrievalHyperparameters(StrictModel):
-    top_n_per_variant: PositiveInt = 50
-    top_n_fused: PositiveInt = 100
+    # top_n_per_variant/top_n_fused: winner config from the youcook2 benchmark's
+    # hyperparameter sweep (irrelevant_things/benchmarks/youcook2/hyperparameter_sweep_results.md) -
+    # wide retrieval measurably improved adaptive_coarse recall over the previous
+    # narrower defaults with no downside found.
+    top_n_per_variant: PositiveInt = 500
+    top_n_fused: PositiveInt = 1000
     rrf_k: PositiveInt = 60
     query_variants_per_event: PositiveInt = 4
 
@@ -137,19 +141,22 @@ class RefinementHyperparameters(StrictModel):
     quality_profile_enabled: bool = False
     use_reranker: bool = False
 
-    max_initial_videos: PositiveInt = 5
-    max_regions_per_event_per_video: PositiveInt = 3
-    max_total_regions: PositiveInt = 60
+    max_initial_videos: PositiveInt = 20
+    max_regions_per_event_per_video: PositiveInt = 5
+    max_total_regions: PositiveInt = 400
     exploration_region_ratio: UnitScore = 0.15
-    max_frames_per_run: FrameRunBudget = 2000
+    max_frames_per_run: FrameRunBudget = 12000
     embedding_batch_size: EmbeddingBatchSize = 64
     medium_interval_seconds: PositiveFloat = 0.5
     dense_interval_seconds: PositiveFloat = 0.1
     dense_radius_seconds: PositiveFloat = 1.0
 
-    video_coverage_weight: NonNegativeFloat = 0.5
-    video_mean_weight: NonNegativeFloat = 0.3
-    video_min_weight: NonNegativeFloat = 0.2
+    # Winner config from the same hyperparameter sweep: mean-only ranking beat
+    # every blend that included coverage or min once retrieval is wide (see
+    # hyperparameter_sweep_results.md finding #2).
+    video_coverage_weight: NonNegativeFloat = 0.0
+    video_mean_weight: NonNegativeFloat = 1.0
+    video_min_weight: NonNegativeFloat = 0.0
 
     @model_validator(mode="after")
     def validate_refinement_configuration(self) -> "RefinementHyperparameters":
