@@ -43,6 +43,15 @@ RefinementStatus = Literal[
 RegionUserStatus = Literal["active", "fixed", "rejected"]
 ProposalSource = Literal["sparse", "medium", "dense", "user"]
 ProposalUserStatus = Literal["active", "fixed", "confirmed", "rejected"]
+TemporalRelationType = Literal[
+    "sequence_start",
+    "after",
+    "before",
+    "during",
+    "simultaneous",
+    "independent",
+    "unknown",
+]
 
 
 class StrictModel(BaseModel):
@@ -297,16 +306,21 @@ class TupleRankingHyperparameters(StrictModel):
     scored well alone in the benchmark but combined poorly with
     confidence_gate - not used together in the winning configuration."""
 
-    confidence_gate: Literal["none", "linear", "threshold"] = "threshold"
-    """How `order_weight` is scaled by a tuple's own `region_mean_score`
-    before being applied - "none" (fixed order_weight, caused the tail-recall
-    regression), "linear" (order_weight * region_mean_score), or "threshold"
-    (order_weight if region_mean_score >= confidence_gate_threshold else 0 -
-    the winning choice)."""
+    confidence_gate: Literal["none", "linear", "threshold", "margin"] = "threshold"
+    """How `order_weight` is scaled before being applied - "none" (fixed
+    order_weight, caused the tail-recall regression), "linear" (order_weight
+    * region_mean_score), "threshold" (order_weight if region_mean_score >=
+    confidence_gate_threshold else 0 - the winning choice as of the n=30/60
+    sweeps), or "margin" (same hard-cutoff shape as "threshold", but gated on
+    each event's chosen-region-vs-best-alternative score gap instead of the
+    tuple's mean region score - see `tuple_ranking._region_margin`). See
+    region_tuple_ranking_results.md for the fine-grained tau sweep comparing
+    "threshold" against "margin"."""
 
     confidence_gate_threshold: UnitScore = 0.5
-    """Only used when confidence_gate="threshold". Chosen from a 3-point
-    sweep (0.3/0.5/0.7); not a fine-grained optimum."""
+    """Cutoff for confidence_gate="threshold" or "margin". See
+    region_tuple_ranking_results.md for the fine-grained sweep this default
+    was chosen from."""
 
     max_combinations_per_video: PositiveInt = 20_000
     """Hard cap on tuples explored per video during backtracking - a safety
@@ -346,6 +360,8 @@ class EventDefinition(StrictModel):
     pre_state: NonEmptyStr | None = None
     post_state: NonEmptyStr | None = None
     boundary_type: BoundaryType = "unknown"
+    temporal_relation: TemporalRelationType = "unknown"
+    reference_event_id: NonEmptyStr | None = None
 
     @model_validator(mode="after")
     def validate_transition_states(self) -> "EventDefinition":
@@ -356,6 +372,23 @@ class EventDefinition(StrictModel):
             raise ValueError(
                 "transition boundary profiles require both pre_state and post_state"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_temporal_relation_reference(self) -> "EventDefinition":
+        relation_requires_reference = self.temporal_relation in {
+            "after", "before", "during", "simultaneous",
+        }
+        if relation_requires_reference and self.reference_event_id is None:
+            raise ValueError(
+                f"temporal_relation={self.temporal_relation!r} requires reference_event_id"
+            )
+        if not relation_requires_reference and self.reference_event_id is not None:
+            raise ValueError(
+                f"temporal_relation={self.temporal_relation!r} requires reference_event_id to be null"
+            )
+        if self.reference_event_id == self.event_id:
+            raise ValueError("reference_event_id must not reference the event itself")
         return self
 
 

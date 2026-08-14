@@ -38,6 +38,11 @@ def summarize(rows: list[dict[str, Any]], label: str, rank_key: str, hits_key: s
 
 def build_report(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     summaries = [summarize(rows, "baseline (prioritize_videos)", "rank_baseline", "hits_baseline")]
+    if "rank_baseline_atomic" in rows[0]:
+        summaries.append(summarize(
+            rows, "baseline, no-clustering (atomic regions)",
+            "rank_baseline_atomic", "hits_baseline_atomic",
+        ))
     variant_labels = list(rows[0]["variants"].keys())
     for label in variant_labels:
         variant_rows = [

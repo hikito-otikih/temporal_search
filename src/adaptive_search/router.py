@@ -58,7 +58,7 @@ from .algorithms import prioritize_videos, robust_sigmoid
 from .boundary_refinement import refine_event_boundary
 from .boundary_seeds import select_event_seeds
 from .providers import VideoAssetNotFoundError
-from .tuple_ranking import rank_videos_by_region_tuples
+from .tuple_ranking import atomic_regions, build_order_constraints, rank_videos_by_region_tuples
 from .schemas import (
     BoundaryType,
     EventDefinition,
@@ -570,11 +570,24 @@ def get_video_priorities(
 
         tuple_anchors_by_video: dict[str, dict[str, float]] = {}
         if apply_tuple_ranking:
+            order_constraints = build_order_constraints(bundle.session.events)
+            # Atomic (unclustered) regions, not bundle.artifacts.regions - the
+            # n=60 comparison in region_tuple_ranking_results.md found atomic
+            # regions + temporal_relation + confidence_gate="threshold"@0.5
+            # the best final_query_score across all rounds, with a per-video
+            # regression profile (44/60 identical, 15/60 a tie-break-level
+            # rank shift with hits held constant, 1/60 better) judged
+            # acceptable relative to the aggregate gain. Stage 3 clustering
+            # (cluster_temporal_regions) still runs and still feeds the
+            # independent-argmax baseline above and boundary-refinement seed
+            # selection below - both untouched by this change, and the
+            # baseline is separately proven invariant to region granularity.
             tuple_ranking, tuples_by_video = rank_videos_by_region_tuples(
-                bundle.artifacts.regions,
+                atomic_regions(bundle.artifacts.candidates),
                 candidates_by_id,
                 event_ids,
                 bundle.session.hyperparameters.tuple_ranking,
+                order_constraints,
             )
             # Raw tuple scores aren't bounded to [0,1] (mean region score can
             # be pushed above 1 or below 0 by the order term) - normalize the

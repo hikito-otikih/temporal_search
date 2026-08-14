@@ -132,6 +132,7 @@ from an actual session created against the running backend on
 
 % =====================================================================
 \section{Stage 1: LLM Query Rewriting}
+\label{sec:stage1}
 % =====================================================================
 
 \subsection{What it does}
@@ -570,6 +571,680 @@ events the pipeline never found any region for at all.
 \end{itemize}
 
 % =====================================================================
+\section{Methodology: Multi-Region Pooling and Order-Aware Tuple Ranking}
+\label{sec:tuple-ranking}
+% =====================================================================
+
+Section~\ref{sec:no-tuple} established that Stage 4 has no mechanism for
+cross-event reasoning: each event's contribution to a video's score is an
+independent maximum (Eq.~\ref{eq:best-event-score}), and Stage 5 seeds each
+event's refinement independently of every other event
+(Section~\ref{sec:stage5}, ``Independence and its consequence''). This
+section documents a proposed extension addressing that gap directly ---
+its design, the three rounds of ablation it was validated under, and its
+integration into the live service as an opt-in mode --- rather than a
+correction to the existing pipeline description.
+
+\subsection{Motivation}
+Two properties of Stages 2--5 compound into the failure mode
+Section~\ref{sec:stage5} demonstrated on \texttt{BK80fNF9ysI}. First,
+retrieval deliberately casts a wide net per event
+(\code{top\_n\_fused}=1000, Section~\ref{sec:stage2}) and clustering can
+leave several distinct regions per event per video
+(Section~\ref{sec:stage3}), yet Eq.~\ref{eq:best-event-score} collapses
+that entire pool to a single number via $\max$, and
+\file{boundary\_seeds.py::select\_event\_seeds} (Section~\ref{sec:stage5})
+collapses it again to a single seed --- \code{seeds[0]} --- before
+refinement ever runs. Second, because that arg-max is taken independently
+per event, nothing in the pipeline can express or reward the fact that a
+query's events are expected to occur in a particular temporal order. Both
+properties are architectural, not incidental: the pipeline was deliberately
+built this way to keep Stage 4 cheap (CPU-only, no embedder) and Stage 5's
+search local (Section~\ref{sec:stage5}, ``the module's own docstring is
+explicit that comparing scores across several independently swept seed
+neighborhoods `was tried and found structurally invalid'''). The design
+question this section answers is whether cross-event structure can be
+reintroduced \emph{without} reintroducing the cost that motivated removing
+it in the first place --- i.e.\ entirely within the cheap, region-score
+stage, never touching the embedder.
+
+\subsection{Design}
+\label{sec:tuple-design}
+
+\subsubsection{Multi-region pooling}
+For an $(e, v)$ pair, instead of retaining only the arg-max region, pool
+every region within an absolute floor $\alpha$ and a relative band $\delta$
+of the best. Writing $s(\rho)$ for \code{normalized\_coarse\_score}$(\rho)$
+(Eq.~\ref{eq:region-norm}) and $\rho^\star = \max_\rho s(\rho)$:
+\begin{equation}
+  \mathrm{pool}(e, v) = \bigl\{\, \rho : \mathrm{event}(\rho){=}e,\ \mathrm{video}(\rho){=}v,\
+    s(\rho) \ge \alpha,\ s(\rho) \ge \rho^\star - \delta \,\bigr\}[{:}N],
+  \label{eq:pool}
+\end{equation}
+where $[{:}N]$ denotes best-score-first truncation at
+\code{max\_regions\_per\_event}. Because $\rho^\star$ itself always
+satisfies both conditions, $\mathrm{pool}(e,v)$ is never empty when at
+least one region exists, and always contains the single region
+Eq.~\ref{eq:best-event-score} would have picked --- this is what makes the
+correctness invariant of Section~\ref{sec:tuple-invariant} provable rather
+than merely observed.
+
+\subsubsection{Tuple assembly and order scoring}
+For a video with pools $\mathrm{pool}(e_1,v),\dots,\mathrm{pool}(e_N,v)$
+(a region missing entirely, i.e.\ $\mathrm{pool}(e_i,v)=\varnothing$, is
+represented as a single placeholder choice contributing $0$ to the mean
+below and no timestamp --- the same zero-fill convention as
+Eq.~\ref{eq:priority}, not a reason to drop the video), every combination
+choosing one member per event is a candidate tuple, enumerated by bounded
+backtracking capped at \code{max\_combinations\_per\_video} (best-region-first
+per event, so truncation drops the least-promising combinations first, not
+an arbitrary prefix). For a chosen tuple $c=(\rho_1,\dots,\rho_N)$ with
+representative timestamps $t_i$ (each region's own best-scoring member
+candidate's timestamp --- the same quantity \code{select\_event\_seeds}
+would return as \code{seeds[0]} for that region alone):
+\begin{equation}
+  \mathrm{order}(c) = \frac{2 \cdot |\{(p,s) \in C : t_s > t_p\}| - |C|}{|C|}
+  \ \in [-1, 1],
+  \label{eq:order-score}
+\end{equation}
+where $C$ is a set of \emph{directional} constraints, each pair
+$(p,s)$ meaning ``event $p$'s timestamp is expected to precede event $s$'s,''
+restricted to pairs where both $t_p,t_s$ are defined (an uncovered event
+drops any constraint touching it, imposing no ordering requirement on its
+neighbors). \corr{A correctness fix applied during this work:} $C$ must be
+built from each event's actual claimed relation to another event
+(\code{reference\_event\_id}, Section~\ref{sec:stage1}), \emph{not} from
+adjacent query-list position. An earlier implementation used the adjacent
+chain $C=\{(1,2),(2,3),\dots\}$ unconditionally; if a query ever describes
+event $i$ as \code{after} a \emph{later-listed} event $j$ (relation
+direction disagreeing with list position, which the rewrite stage's own
+grounding rules in Section~\ref{sec:stage1} permit and do not forbid), that
+implementation would score the pair backwards --- rewarding exactly the
+violation the relation claims. The fix replaces the boolean
+``check this adjacent pair or not'' with explicit
+$(p,s)$ pairs derived from relation direction; $C$ defaults to the adjacent
+chain only when no relation data is available for a video.
+Verified by a unit test reproducing this exact scenario: relation
+``event~0 after event~1'' with timestamps ordered so that event~0 precedes
+event~1 must score Eq.~\ref{eq:order-score} as $-1$ (a violation), not the
+$+1$ a list-position check would have produced.
+
+\corr{A second fix, Section~\ref{sec:tuple-round4}:} direct edges alone
+under-use the relation graph. \code{build\_order\_constraints}
+(\file{tuple\_ranking.py}) now closes $C$ \emph{transitively} --- given
+direct edges $A\!\to\!B$ and $B\!\to\!C$ (from two separate events' own
+\code{reference\_event\_id}s), it also derives $A\!\to\!C$ via reachability
+over the (small, per-query) event graph, so order-checking is not limited to
+pairs some event directly references. \code{during} and \code{simultaneous}
+relations still contribute no edge, but this is now an explicit, documented
+branch (this pairwise-precedence model has no correct encoding for
+temporal overlap/proximity; asserting a direction would be wrong as often as
+right) rather than a silent fallthrough. \code{EventDefinition}
+(\file{schemas.py}) was also extended with real \code{temporal\_relation}/
+\code{reference\_event\_id} fields, populated by \file{rewrite\_bridge.py}
+from the actual rewrite output (Section~\ref{sec:stage1}) --- $C$ is built
+from live session data in production today, not only from this section's
+offline benchmark cache.
+
+\subsubsection{Confidence-gated order weight}
+An unconditional order bonus was found, in Round 1
+(Section~\ref{sec:tuple-round1}), to help videos where the underlying
+region scores already carry real signal and actively mislead where they do
+not --- rewarding two candidates' being ``in order'' is only evidence of
+anything when those candidates are themselves plausible. The order term's
+weight is therefore scaled by the tuple's own mean region score before
+being applied:
+\begin{equation}
+  w_{\mathrm{eff}}(c) =
+  \begin{cases}
+    w_o & \text{gate} = \code{none} \\
+    w_o \cdot \mu(c) & \text{gate} = \code{linear} \\
+    w_o \ \text{if}\ \mu(c) \ge \tau\ \text{else}\ 0 & \text{gate} = \code{threshold}
+  \end{cases}
+  \label{eq:gate}
+\end{equation}
+where $\mu(c) = \frac{1}{N}\sum_i \code{normalized\_coarse\_score}(\rho_i)$
+(the tuple's mean region score, $0$ for an uncovered event's placeholder)
+and $\tau=$ \code{confidence\_gate\_threshold}. A tuple's final score is
+\begin{equation}
+  \mathrm{score}(c) = \mu(c) + w_{\mathrm{eff}}(c) \cdot \mathrm{order}(c),
+  \label{eq:tuple-score}
+\end{equation}
+and a video's score is either the best tuple's score
+(\code{pooling=}\code{"max"}) or the mean of its kept tuples
+(\code{pooling=}\code{"mean"}, capped at \code{max\_tuples\_per\_video}).
+
+\subsubsection{Correctness invariant}
+\label{sec:tuple-invariant}
+At $w_o=0$, Eq.~\ref{eq:tuple-score} reduces to $\mu(c)$ alone, and because
+$\mathrm{pool}(e,v)$ always contains each event's independently-best
+region (Eq.~\ref{eq:pool}), the unconstrained best combination is provably
+just ``each event's own best region'' --- exactly what
+Eq.~\ref{eq:best-event-score}/\ref{eq:priority} already compute. Video
+ranking under this design at $w_o=0$ must therefore reproduce
+\file{algorithms.py::prioritize\_videos} byte-for-byte, modulo tie-breaks.
+This was verified twice: as a unit test on synthetic regions, and --- more
+importantly, since it is the one property that must hold before any
+benchmark result can be trusted --- reproduced exactly on real data in every
+round below.
+
+\subsection{Experimental Methodology}
+\label{sec:tuple-experiment}
+All results in this section come from real, live infrastructure: the
+production sparse-retrieval service (via
+\file{adaptive\_search/dependencies.py::upstream\_search\_client}), real
+YouCook2 recipe videos, and, for Round 2's \code{temporal\_relation}
+condition, the real LLM rewrite service (Section~\ref{sec:stage1}) run once
+per video and cached. No result below is synthetic or hand-computed.
+
+\textbf{Sample.} $n=30$ videos (first 30, sorted, of 203 available query
+files), matching this codebase's existing benchmark convention
+(\file{irrelevant\_things/benchmarks/youcook2/}).
+
+\textbf{Paired, noise-free comparison.} For each video, real upstream
+candidates are fetched \emph{once}, fused and clustered \emph{once}
+(clustering hyperparameters were separately confirmed invariant to this
+question --- sweeping \code{gap\_seconds}/\code{margin\_seconds}/
+\code{max\_region\_seconds} across nine configurations spanning a 600$\times$
+range changed neither ranking nor refinement seeds on this same real data).
+Every swept configuration of this section's algorithm is then evaluated
+offline, in Python, against that one fetched/clustered dataset --- the
+established ``fetch once, sweep cheaply'' pattern this codebase already
+uses for its other hyperparameter sweeps
+(\file{hyperparameter\_sweep\_results.md}).
+
+\textbf{Metrics.} The repository's existing definitions
+(\file{boundary\_metrics.py}), reused unmodified for direct comparability
+with prior benchmark documents:
+\begin{align}
+  \code{recall@k\_new}(\mathrm{rank}, \mathrm{hits}) &= \mathrm{hits}\ \text{if}\ \mathrm{rank}\le k\ \text{else}\ 0,\\
+  \code{final\_query\_score} &= \mathrm{mean}_{k \in \{1,5,20,50,100\}}\ \code{recall@k\_new},
+\end{align}
+where $\mathrm{rank}$ is the ground-truth video's position and
+$\mathrm{hits}$ is how many of its own events' anchor timestamps fall
+inside their annotated ground-truth interval --- a joint measure of ranking
+quality (Branch A) \emph{and} anchor quality (Branch B), since this design
+changes both simultaneously (Section~\ref{sec:tuple-integration}).
+
+\subsubsection{Round 1: core proposal ablation}
+\label{sec:tuple-round1}
+Swept $\delta \in \{0.05, 0.10, 0.15, 0.25, 0.40\}$, $N \in \{1,\dots,20\}$,
+$w_o \in \{0, 0.05, 0.1, 0.2, 0.4, 0.8\}$, and \code{pooling}
+$\in\{\code{max},\code{mean}\}$, at $C$ defaulting to the adjacent chain
+(no \code{temporal\_relation} data used yet).
+
+\subsubsection{Round 2: relation-aware constraints, confidence gating, deeper pooling}
+\label{sec:tuple-round2}
+Three follow-up questions, each requiring new infrastructure: (i) does
+building $C$ from real \code{temporal\_relation} data change anything ---
+required one real LLM rewrite call per video (Section~\ref{sec:stage1}),
+cached to \file{runs/temporal\_relations\_cache.jsonl} (29/30 succeeded; one
+failed on an unrelated schema-validation error and fell back to the
+adjacent-chain default); (ii) does Eq.~\ref{eq:gate} recover the tail-recall
+regression Round 1's unconditional $w_o$ found --- tested
+\code{gate}$\in\{\code{none},\code{linear},\code{threshold}\}$ at
+$\tau\in\{0.3,0.5,0.7\}$; (iii) does pooling deeper than $N=20$ help ---
+tested $N\in\{30,50,100,200\}$, with \code{max\_combinations\_per\_video}
+raised to $5{\times}10^5$ so the wider pools were not silently truncated by
+the same cap that (at default settings) already binds at $N{=}20$
+($20^4=160{,}000 > 20{,}000$).
+
+\subsubsection{Round 3: a correctness fix, re-validated}
+\label{sec:tuple-round3}
+The list-position bug described in Section~\ref{sec:tuple-design} was found
+by direct code review, not by any benchmark discrepancy, and fixed as
+described there. The full sweep was re-run after the fix; results were
+byte-for-byte identical to Round 2, which is itself informative: every real
+\code{after} relation observed in this corpus referenced the immediately
+preceding list index (Section~\ref{sec:tuple-results}), so the buggy and
+fixed implementations happened to agree on every video tested --- the bug
+was real and reachable in principle, never triggered on this sample, and is
+now closed for any future query where list order and claimed chronology
+diverge.
+
+\subsubsection{Round 4: two limitations closed, $n$ doubled to 60, a no-clustering ablation}
+\label{sec:tuple-round4}
+Three follow-ups: (i) fix the two remaining scope gaps that most needed it --- transitive relation
+closure and \code{EventDefinition} actually carrying \code{temporal\_relation} in production
+(both described in Section~\ref{sec:tuple-design}); (ii) double the sample to $n=60$ (the
+\code{temporal\_relations\_cache} was extended the same way: 60/60 cached, one unrelated
+schema-validation failure, still 100\% \code{after} across all 176 classified adjacent pairs ---
+the corpus property Round 3 found at $n=30$, confirmed at double the sample); (iii) test whether
+Stage 3 (\file{algorithms.py::cluster\_temporal\_regions}) matters for tuple ranking specifically,
+by building an \emph{atomic} region set --- one \code{TemporalRegion} per candidate, no clustering
+at all --- from the same fused candidates, and running the full sweep against both region sets in
+parallel. Both fixes are covered by 34 unit tests (up from 26) and 6 HTTP integration tests (up
+from 5), including a test that constructs a live session where an event is listed first but is
+explicitly \code{after} a later-listed event, and confirms refinement picks the anchor the
+\emph{relation} implies through the real HTTP $\to$ RRF $\to$ clustering pipeline, not the one list
+position would have implied.
+
+\subsubsection{Round 5: fine-grained $\tau$ sweep and the full atomic-region grid}
+\label{sec:tuple-round5}
+Two follow-ups to Round 4's own limitations: (i) sweep $\tau$ at $0.05$ resolution (19 points,
+$0.05$--$0.95$) for both the existing mean-score gate and a new \emph{margin}-based gate, find the
+best $\tau$ for each, and compare them; (ii) extend the no-clustering ablation past its Round 4
+subset (\code{default}, $N\in\{1,5,20\}$, \code{pooling=mean}) to the full grid Rounds 1--2 swept
+under clustering (\code{delta}$\in\{0.05,0.10,0.15,0.25,0.40\}$, $N\in\{1,2,3,5,10,20,30,50,100,200\}$,
+\code{order\_weight}$\in\{0.05,0.2,0.4,0.8\}$, \code{pooling}$\in\{$\code{max},\code{mean}$\}$).
+
+\code{\_region\_margin(region, pool)} (\file{tuple\_ranking.py}) computes, for the \emph{specific}
+region a combination actually selects for an event (not a pool-level constant): if that region is
+the pool's top scorer, the gap to the runner-up; otherwise the (negative) gap between the
+reached-for region's own score and the pool's actual top score --- correctly signaling lower
+confidence the further down the pool a tuple reached to satisfy the order term. Single-member pools
+fall back to the region's own score. \code{confidence\_gate="margin"} routes this per-event value
+(meaned across the tuple) through the exact same hard-cutoff shape as \code{"threshold"}
+(\code{\_effective\_order\_weight}), so the two signals are compared apples-to-apples: identical gate
+shape and $\tau$ grid, only the confidence value differs. Covered by 4 new unit tests (39 total, up
+from 34).
+
+\subsubsection{Round 6: the missing combo, and the production switch to atomic regions}
+\label{sec:tuple-round6}
+Round 5's atomic-region grid never combined atomic regions with \code{temporal\_relation} gating ---
+the flagship ``production'' configuration was only ever benchmarked on clustered regions. This round
+adds the one missing config (92 total,
+\file{region\_tuple\_sweep\_n60\_v4.jsonl}) and, on its result, promotes atomic regions to the
+production default for the tuple-ranking path: \code{router.py::get\_video\_priorities} now builds
+the pool via \code{tuple\_ranking.atomic\_regions(bundle.artifacts.candidates)} instead of passing
+\code{bundle.artifacts.regions}. Stage 3 clustering still runs and still feeds the independent-argmax
+baseline and boundary-refinement seeding, both untouched and outside this ablation's scope.
+
+\subsection{Results}
+\label{sec:tuple-results}
+
+\textbf{Round 1 (Table~\ref{tab:tuple-round1}).} At the eventual production
+configuration, \code{final\_query\_score} rose from $1.4667$ to $1.6333$
+($+11.4\%$); restricting to the 19/30 ``hard'' videos where the baseline
+does not already rank the ground truth first, MRR rose from $0.1152$ to
+$0.1885$ ($w_o{=}0.1$, $+64\%$ relative) to $0.2258$ ($w_o{=}0.8$, $+96\%$
+relative). Most of the gain came from the order term itself, not pooling
+depth: $N{=}1$ (order-awareness with \emph{no} pooling) alone moved
+\code{final\_query\_score} to $1.5000$; $N{=}5$ already captured the entire
+remaining gain, with $N{=}10,20$ identical to it.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Configuration & r@1 & r@5 & r@20 & r@50 & r@100 & \code{final\_query\_score} \\
+\midrule
+baseline (\code{prioritize\_videos}) & 0.367 & 0.467 & 0.633 & 0.833 & 0.867 & 1.4667 \\
+$w_o{=}0$ (invariant check, \S\ref{sec:tuple-invariant}) & 0.367 & 0.467 & 0.633 & 0.833 & 0.867 & 1.4667 \\
+$N{=}1$ (order term only) & 0.367 & 0.500 & 0.667 & 0.733 & 0.867 & 1.5000 \\
+default ($\delta{=}0.15$, $N{=}20$, $w_o{=}0.1$) & 0.400 & 0.533 & 0.733 & 0.733 & 0.867 & 1.6333 \\
+$w_o{=}0.8$ (ungated) & 0.400 & 0.600 & 0.733 & 0.733 & 0.767 & 1.6333 \\
+\code{pooling=mean} & \textbf{0.433} & 0.533 & 0.700 & 0.733 & 0.867 & 1.6400 \\
+\bottomrule
+\end{tabular}
+\caption{Round 1, $n=30$. Full sweep: \file{region\_tuple\_ranking\_results.md}.}
+\label{tab:tuple-round1}
+\end{table}
+
+\textbf{Regression, diagnosed causally.} $w_o{=}0.8$ (ungated) regressed
+\code{recall@50} from $0.833$ to $0.667$. Tracing the specific videos showed
+every regression shared one property: \code{hits\_baseline} was already low
+($0$--$2$ of 4), i.e.\ the underlying region scores carried little real
+signal --- exactly the condition Eq.~\ref{eq:gate} was designed to detect.
+
+\textbf{Round 2/3 (Table~\ref{tab:tuple-gate}).} \code{temporal\_relation}-gated
+configurations were numerically \emph{identical} to their ungated twins:
+of 87 real classified adjacent pairs across 29 successfully-cached videos,
+100\% were \code{after}, referencing the immediately preceding list index
+--- this is why Round 3's correctness fix could be re-validated as a
+no-regression change (Section~\ref{sec:tuple-round3}) rather than a numeric
+one. Pooling beyond $N{=}20$ was flat through $N{=}200$
+(\code{final\_query\_score}$=1.6067$ at every value $N\ge5$, unchanged).
+\code{confidence\_gate=threshold} at $\tau=0.5$ was the best configuration
+found in either round:
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Gate (at $w_o{=}0.8$) & r@1 & r@5 & r@20 & r@50 & r@100 & \code{final\_query\_score} \\
+\midrule
+none (ungated) & 0.400 & 0.600 & 0.667 & 0.667 & 0.767 & 1.6067 \\
+linear & 0.400 & 0.600 & 0.667 & 0.700 & 0.767 & 1.6133 \\
+threshold, $\tau{=}0.3$ & 0.400 & 0.600 & 0.667 & 0.700 & 0.767 & 1.6133 \\
+\textbf{threshold, $\tau{=}0.5$} & \textbf{0.400} & \textbf{0.600} & \textbf{0.733} & \textbf{0.833} & \textbf{0.867} & \textbf{1.6867} \\
+threshold, $\tau{=}0.7$ & 0.367 & 0.533 & 0.633 & 0.833 & 0.867 & 1.5733 \\
+\bottomrule
+\end{tabular}
+\caption{Confidence-gate comparison, $n=30$, Round 2/3 (post-fix, byte-identical to
+pre-fix). $\tau{=}0.5$ fully recovers r@50/r@100 to baseline while retaining
+every head-of-list gain.}
+\label{tab:tuple-gate}
+\end{table}
+
+\textbf{Causal verification of the fix (Table~\ref{tab:tuple-regression-fix}).}
+The five videos identified as regressing under $w_o{=}0.8$ (ungated) were
+checked individually under \code{threshold}@$0.5$: every one is not merely
+improved but reversed to \emph{better than baseline}. Scanning all 30
+videos for any regression at all under this configuration: exactly one, a
+trivial rank $1\to2$.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\code{video\_id} & baseline & default & $w_o{=}0.8$ (ungated) & \textbf{threshold@0.5} \\
+\midrule
+\code{1HK-p8abRq8} & 48 & 60 & 89 & \textbf{47} \\
+\code{3rtzSsuJ4Ng} & 22 & 50 & 415 & \textbf{21} \\
+\code{4B6j3gYkvr4} & 86 & 134 & 531 & \textbf{73} \\
+\code{7-WEdqJBXoQ} & 36 & 73 & 410 & \textbf{32} \\
+\code{0Mz4NTozNXw} & 134 & 136 & 118 & 132 \\
+\bottomrule
+\end{tabular}
+\caption{Ground-truth video rank (lower is better) for the five videos regressing
+under an ungated order bonus, before and after confidence-gating.}
+\label{tab:tuple-regression-fix}
+\end{table}
+
+\noindent One negative interaction, reported rather than hidden:
+\code{confidence\_gate} combined with \code{pooling=mean} scored \emph{worse}
+than \code{pooling=mean} alone ($1.5467$ vs.\ $1.6333$) --- gating each
+tuple's order bonus before mean-pooling across many tuples per video appears
+to dilute mean-pooling's own preference for consistently-good combinations;
+not investigated further.
+
+\textbf{Round 4, $n=60$ (Table~\ref{tab:tuple-n60}).} The best configuration across all four
+rounds: \code{production (threshold@0.5, $w_o$=0.8) + temporal\_relation}, final\_query\_score
+$1.2133\to1.3533$ ($+11.5\%$), leading or matching every other row on every column.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Configuration ($n=60$) & r@1 & r@5 & r@20 & r@50 & r@100 & \code{final\_query\_score} \\
+\midrule
+baseline (\code{prioritize\_videos}) & 0.300 & 0.433 & 0.650 & 0.783 & 0.833 & 1.2133 \\
+baseline, no-clustering (atomic) & 0.300 & 0.433 & 0.650 & 0.783 & 0.833 & 1.2133 \\
+default (= production, threshold@0.5) & 0.350 & 0.533 & 0.667 & 0.800 & 0.833 & 1.3300 \\
+$\mathrm{gate}{=}\code{none}$, $w_o{=}0.8$ (ungated) & 0.350 & 0.517 & 0.617 & \textbf{0.667} & 0.783 & 1.2733 \\
+\code{temporal\_relation}-gated (default) & 0.367 & 0.550 & 0.683 & 0.800 & 0.833 & 1.3533 \\
+\textbf{production + \code{temporal\_relation}} & \textbf{0.367} & \textbf{0.550} & 0.683 & \textbf{0.800} & \textbf{0.833} & \textbf{1.3533} \\
+no-clustering (atomic), default & 0.367 & 0.533 & 0.667 & 0.800 & 0.833 & 1.3500 \\
+\bottomrule
+\end{tabular}
+\caption{Round 4, $n=60$. Full sweep (37 configs): \file{region\_tuple\_sweep\_n60\_v2.jsonl}.}
+\label{tab:tuple-n60}
+\end{table}
+
+\emph{Baseline invariance, now per-video at $n=60$:} \code{rank\_baseline} equals
+\code{rank\_baseline\_atomic} exactly on all 60 videos, zero exceptions --- the strongest
+confirmation yet of Section~\ref{sec:stage4}'s max-of-maxes argument.
+
+\emph{Transitive closure makes \code{temporal\_relation} matter, even on a 100\%-\code{after}
+corpus.} Round 3 found \code{temporal\_relation}-gated configs numerically identical to their
+ungated twins and concluded the mechanism was inert on this corpus; that no longer holds. A
+direct-edges-only constraint set for an $N$-event \code{after} chain has only $N{-}1$ pairs (the
+adjacent chain a list-position default already produces); transitive closure over the same chain
+has $\binom{N}{2}$ pairs, giving order-checking access to non-adjacent comparisons it never had ---
+a structural gain, independent of whether relations happen to already agree with list order.
+Per-video: 12/58 improved, 8/58 regressed, 38/58 unchanged (mean rank delta $-0.50$).
+
+\emph{Confidence-gating, re-examined with a larger, more honest regression set.} 15 videos regress
+under ungated $w_o{=}0.8$ at $n=60$ (vs.\ 5 at $n=30$ --- proportionally consistent, a larger sample
+surfaces more of them). \code{threshold@0.5} fully reverses \textbf{10/15} to at-or-better-than-baseline;
+the remaining \textbf{5/15 are substantially mitigated but not fully recovered} --- a more
+calibrated claim than Round 3's, which saw only one trivial residual case by the luck of a smaller
+sample. Every residual case has low \code{hits\_baseline} ($\le$2/4), the same weak-signal
+diagnosis as before, but gating now reads as a strong mitigation rather than a complete fix.
+
+\emph{No-clustering ablation (Table~\ref{tab:tuple-clustering}).} Unlike the baseline algorithm,
+tuple ranking is \textbf{not} exactly invariant to clustering: per-video, 43/58 (74\%) identical,
+14/58 (24\%) worse under atomic regions, 1/58 better (mean rank delta $+0.28$). The effect is
+$N$-dependent --- at $N{=}5$ clustering clearly helps (1.3300 vs.\ 1.2733 atomic); by $N{=}20$
+(production) the gap closes and mildly reverses in the aggregate recall-based metric, even though
+the per-video mean-rank-delta is still mildly negative for atomic regions --- both are reported
+since they can legitimately disagree (recall@$k$ is threshold-based, insensitive to how much a
+non-crossing rank changed). $N{=}1$ clustered and atomic are exactly identical on every video (both
+reduce to each event's single best-scoring candidate, provably independent of region granularity)
+--- a free internal-consistency check.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+& identical & atomic worse & atomic better \\
+\midrule
+Baseline (\code{prioritize\_videos}) & 60/60 & 0 & 0 \\
+Tuple ranking, default ($N{=}20$) & 43/58 & 14/58 & 1/58 \\
+\bottomrule
+\end{tabular}
+\caption{Per-video effect of skipping Stage 3 entirely (clustered vs.\ atomic regions), $n=60$.}
+\label{tab:tuple-clustering}
+\end{table}
+
+\noindent \textbf{Direct answer:} the system stays close to stable with clustering removed ---
+mostly unaffected, a small real cost concentrated in a minority of videos at small pooling budgets,
+that mostly washes out by the production $N{=}20$ in aggregate recall (though not in mean rank).
+Clustering is not strictly load-bearing at production hyperparameters, but it is not free to remove
+either; keeping Stage 3 as-is remains the right default.
+
+\textbf{Round 5, $n=60$ (Tables~\ref{tab:tuple-tau} and~\ref{tab:tuple-atomic-grid}).} A 91-config
+sweep (\file{region\_tuple\_sweep\_n60\_v3.jsonl}) resolves both scope gaps Round 4 left open.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+$\tau$ & threshold (\code{region\_mean\_score}) & margin \\
+\midrule
+0.05 & 1.2733 & 1.2000 \\
+0.15 & 1.2733 & 1.1700 \\
+0.25 & 1.2800 & 1.1333 \\
+0.35 & 1.2867 & 1.0667 \\
+0.45 & 1.3133 & 1.0633 \\
+\textbf{0.50} & \textbf{1.3300} & 1.1167 \\
+0.55 & 1.3233 & 1.1200 \\
+0.65 & 1.2967 & 1.1733 \\
+0.75 & 1.2700 & 1.2033 \\
+0.80 & 1.2600 & \textbf{1.2067} \\
+0.95 & 1.2567 & \textbf{1.2067} \\
+\bottomrule
+\end{tabular}
+\caption{Fine-grained $\tau$ sweep (\code{final\_query\_score}), both signals, $n=60$; 10 of 19
+points shown, full grid in the source file. Baseline $=1.2133$.}
+\label{tab:tuple-tau}
+\end{table}
+
+\emph{Finding 1: $\tau=0.5$ is confirmed as the genuine peak for the mean-score signal, not a lucky
+3-point pick.} The 19-point sweep traces a clean, unimodal curve peaking exactly at $\tau=0.50$
+(also where recall@50 first reaches 0.800 and holds through $\tau=0.65$) and falling off smoothly on
+both sides. The production default was already at the true optimum of this grid.
+
+\emph{Finding 2: the margin signal, even at its best $\tau$, does not beat the mean-score signal and
+never reaches the ungated baseline.} Margin's best two points ($\tau=0.80,0.95$, tied at $1.2067$)
+both fall \emph{below} the plain baseline ($1.2133$) --- gating on margin is, at every one of the 19
+tested cutoffs, worse than not gating \code{order\_weight} at all. The signal is also far less
+stable (median-rank-found swings $6$--$29$ across the grid, vs.\ threshold's $4$--$9$), consistent
+with how \code{\_region\_margin} is defined: a non-top pick's margin goes \emph{negative}, and
+single-candidate pools fall back to an absolute score, so margin mixes small signed gaps with
+occasional large absolute values on a scale a $\tau$ grid tuned for an always-$[0,1]$ mean-score
+signal is not calibrated for. \textbf{No change to the production default:}
+\code{confidence\_gate="threshold"}, \code{confidence\_gate\_threshold=0.5} remains correct, now
+backed by a 19-point sweep with the compared alternative shown to underperform at every setting
+rather than merely untried.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Setting & clustered & atomic & $\Delta$ \\
+\midrule
+delta=0.05 & 1.3067 & 1.3000 & $-0.0067$ \\
+delta=0.15 (default) & 1.3300 & 1.3500 & $+0.0200$ \\
+delta=0.40 & 1.3500 & 1.3300 & $-0.0200$ \\
+$N=1$ & 1.2133 & 1.2133 & $0.0000$ \\
+$N=5$ & 1.3300 & 1.2733 & $-0.0567$ \\
+$N=20$ (default) & 1.3300 & 1.3500 & $+0.0200$ \\
+$N=200$ & 1.3300 & 1.3500 & $+0.0200$ \\
+order\_weight=0.05 & 1.2967 & 1.3067 & $+0.0100$ \\
+order\_weight=0.8 (default) & 1.3300 & 1.3500 & $+0.0200$ \\
+pooling=mean & 1.2733 & 1.3433 & $+0.0700$ \\
+\bottomrule
+\end{tabular}
+\caption{Full clustered-vs-atomic grid (\code{final\_query\_score}), $n=60$; 10 of 20 matched
+points shown, full grid in the source file.}
+\label{tab:tuple-atomic-grid}
+\end{table}
+
+\emph{Finding: clustering's aggregate benefit is real but narrow, confined to small pooling budgets
+($N\le5$) and two delta extremes --- at every other tested point (14/20, 70\%), atomic regions tie
+or beat clustered.} $N=1$ reproduces the proven exact-tie invariant. Clustering clearly helps at
+$N\in\{2,3,5\}$ and at the tight \code{delta=0.05} and loose \code{delta=0.40} extremes. Everywhere
+else --- $N\ge10$ (six straight ties/wins), every \code{order\_weight} tested (four straight wins),
+\code{delta}$\in\{0.10,0.15,0.25\}$, and \code{pooling=mean} (the single largest delta in the table,
+$+0.07$ in atomic's favor) --- atomic regions are equal to or better than clustered.
+\corr{This extends, and partially revises, Round 4's ``washes out by $N{=}20$'' read:} it isn't that
+clustering's effect fades to zero at production $N{=}20$ and stays neutral elsewhere --- the full
+grid shows clustering is a small \emph{positive} aid only in a specific low-$N$/extreme-delta
+corner, and mildly \emph{costs} aggregate recall everywhere else, including at the shipped
+production defaults. As in Round 4, this is an aggregate-metric read; the matched per-video diff at
+\code{default} (Table~\ref{tab:tuple-clustering}) is not re-run at all 20 new points, since
+recall@$k$ aggregates can mask a minority-regression pattern like that one. The practical conclusion
+is unchanged: Stage 3 clustering is not load-bearing at the shipped hyperparameters --- atomic is a
+hair \emph{better} in aggregate there --- but it is not free to remove either, since per-video it
+still trades a minority of regressions for the aggregate parity/improvement.
+
+\textbf{Round 6, $n=60$ (Table~\ref{tab:tuple-round6}).} The one untested combo: does the
+atomic-region win at production hyperparameters hold up once \code{temporal\_relation} gating ---
+the actual shipped default --- is layered on top too?
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Configuration ($n=60$) & r@1 & r@5 & r@20 & r@50 & r@100 & \code{final\_query\_score} \\
+\midrule
+baseline (\code{prioritize\_videos}) & 0.300 & 0.433 & 0.650 & 0.783 & 0.833 & 1.2133 \\
+clustered + threshold@0.5 + relation (old) & 0.367 & \textbf{0.550} & 0.683 & 0.800 & 0.833 & 1.3533 \\
+\textbf{atomic + threshold@0.5 + relation (new)} & \textbf{0.367} & 0.533 & 0.683 & 0.800 & 0.833 & \textbf{1.3633} \\
+\bottomrule
+\end{tabular}
+\caption{The missing combo, $n=60$. Full sweep (92 configs): \file{region\_tuple\_sweep\_n60\_v4.jsonl}.}
+\label{tab:tuple-round6}
+\end{table}
+
+\textbf{This is the best \code{final\_query\_score} found across all six rounds} ($1.3633$,
+$+12.4\%$ over baseline), though a mixed win rather than a clean sweep: atomic trades a little MRR
+($0.4449$ vs.\ $0.4518$) and one fewer video in the top 5 for more per-event boundary hits ($1.650$
+vs.\ $1.633$ mean hits/4) and the better composite score. Hard-subset MRR (the 42/60 videos where
+baseline doesn't already rank the ground truth first) shows the same shape: baseline $0.123 \to
+0.219$ ($+78.1\%$ relative) for the new combo, vs.\ $+86.5\%$ for the clustered version it replaces
+--- a real but small give-back on this one metric, not a regression.
+
+\emph{The per-video diff, not just the aggregate, is what justified promoting it.} Diffing the two
+flagship configs video-by-video: 44/60 identical, 15/60 ``worse'' under atomic, 1/60 better.
+Critically, \textbf{every one of the 15 ``worse'' cases preserves \code{hits} exactly} (0-to-0,
+1-to-1, or 2-to-2) --- 13/15 are a bare $\pm1$ rank shift, the remaining 2 shift by 2--4 ranks, and
+none loses a video that was previously found in a useful window. This is a materially more benign
+per-video story than Round 4's original (non-relation-gated) atomic-vs-clustered comparison. On that
+basis atomic was judged an acceptable, and on the headline metric better, default --- not merely a
+tied one.
+
+Verified live against the restarted backend on the Section~\ref{sec:stage1} worked example:
+\code{apply\_tuple\_ranking=true} returns a genuinely different top-5 video ordering than the plain
+baseline against real upstream data, confirming the new code path executes correctly end-to-end, not
+just against the 181-test unit/integration suite (all still green after the change).
+
+\subsection{Production Integration}
+\label{sec:tuple-integration}
+The \code{threshold}@$0.5$, $w_o{=}0.8$, \code{pooling=max} configuration
+was promoted from the benchmark tree
+(\file{irrelevant\_things/benchmarks/youcook2/region\_tuple\_ranking.py}) into
+\file{src/adaptive\_search/tuple\_ranking.py}, with the Section~\ref{sec:tuple-design}
+correctness fix already applied, as an \textbf{opt-in} mode ---
+\code{apply\_tuple\_ranking=true} on \code{GET .../video-priorities}, default
+\code{false} pending validation beyond $n=60$. Round 4's two fixes
+(Section~\ref{sec:tuple-round4}) extended this same production module rather
+than replacing it: \code{build\_order\_constraints} is called from
+\code{router.py} directly on \code{bundle.session.events}, so a live session
+now supplies real, transitively-closed order constraints whenever the
+rewrite stage classified \code{temporal\_relation} for it, with no benchmark
+workaround required. As of Round 6 (Section~\ref{sec:tuple-round6}), the
+region pool itself is also atomic rather than clustered: \code{atomic\_regions}
+moved out of the benchmark driver into \file{tuple\_ranking.py} so both share
+one implementation, and \code{get\_video\_priorities} calls it on
+\code{bundle.artifacts.candidates} in place of \code{bundle.artifacts.regions}
+for this path specifically --- Stage 3 clustering is otherwise unchanged and
+still feeds the independent-argmax baseline and refinement seeding.
+
+\begin{itemize}[nosep]
+  \item \textbf{Ranking.} \code{TupleRankingHyperparameters}
+    (\file{schemas.py}, defaults matching Table~\ref{tab:tuple-gate}'s winner)
+    joins \code{SearchHyperparameters}. When requested, raw tuple scores ---
+    unlike Eq.~\ref{eq:priority}, not bounded to $[0,1]$ --- are passed through
+    \code{robust\_sigmoid} before overwriting \code{priority\_score}, the same
+    normalization \code{assemble\_ordered\_tuples} already applies to its own
+    raw scores (Section~\ref{sec:no-tuple}).
+  \item \textbf{Refinement hand-off.} When \code{apply\_tuple\_ranking} and
+    \code{apply\_boundary\_refinement} are both requested,
+    \code{\_video\_priority\_with\_boundary\_refinement}
+    (Section~\ref{sec:stage5}) seeds each event from the winning tuple's own
+    per-event timestamp instead of an independent
+    \code{select\_event\_seeds} call --- the one piece of integration logic
+    that delivers the \code{hits} improvement of
+    Section~\ref{sec:tuple-results}, not merely the ranking improvement, and
+    the direct fix for the \code{BK80fNF9ysI} anomaly of
+    Section~\ref{sec:stage5}. Refined events are tagged
+    \code{"source": "tuple\_ranking"} (vs.\ \code{"auto"} for independent
+    selection); a \code{commands/fix-frame} user correction
+    (Section~\ref{sec:stage6}) still overrides both unconditionally.
+  \item \textbf{Verification.} 39 unit tests on synthetic regions
+    (\file{tests/adaptive\_search/test\_tuple\_ranking.py}, including the
+    Eq.~\ref{eq:order-score} direction-bug regression test, 8 covering
+    \code{build\_order\_constraints}' transitive closure and
+    \code{during}/\code{simultaneous} handling, and 4 covering the
+    \code{\_region\_margin} gate of Section~\ref{sec:tuple-round5}) plus 6 HTTP-level
+    integration tests against the live FastAPI app
+    (\file{test\_adaptive\_video\_priorities\_tuple\_ranking.py}), including
+    one that constructs a real chronologically-inverted two-event scenario
+    through the actual RRF+clustering pipeline and confirms refinement's
+    anchors change from the independent choice to the tuple's joint choice,
+    and one that constructs a session where an event is listed first but is
+    explicitly \code{after} a later-listed event and confirms refinement
+    follows the \emph{relation}, not list position --- neither a mocked
+    assertion. A live run against the restarted production backend on the
+    Section~\ref{sec:stage1} worked example confirmed
+    \code{tuple\_ranking.requested} is honored, video order changes between
+    modes, and every returned event carries \code{source=tuple\_ranking}.
+\end{itemize}
+
+\subsection{Limitations}
+\begin{itemize}[nosep]
+  \item The 5 residually-regressed videos of Section~\ref{sec:tuple-round4} (all with
+    independently low \code{hits\_baseline}) remain only partially mitigated under
+    \code{threshold@0.5}. Section~\ref{sec:tuple-round5} tried the margin-based lever this
+    limitation previously flagged as untried, at fine $\tau$ granularity, and it does not fix
+    them either --- margin underperforms threshold at every tested cutoff, including on this
+    same regression set. A fix for these 5 videos likely needs a different mechanism entirely
+    (e.g.\ per-event rather than per-tuple confidence), not just a different signal under the
+    same gate shape.
+  \item Not benchmarked head-to-head against \code{assemble\_ordered\_tuples}
+    (Section~\ref{sec:no-tuple}), which solves a related but distinct problem
+    at a different pipeline stage (fine-grained ordering after dense
+    per-frame scoring, not coarse video ranking); the two are complementary,
+    not shown to be substitutable.
+  \item All results are on one corpus (YouCook2 recipe videos, $n=60$ of 203
+    available, whose events are near-uniformly causally sequential ---
+    Section~\ref{sec:tuple-results}'s 100\%-\code{after} finding, confirmed
+    across 176 classified pairs at $n=60$, is a property of this corpus, not
+    a general claim about query structure). \code{during}/\code{simultaneous}
+    handling in \code{build\_order\_constraints} is unit-tested on synthetic
+    data only --- no video in this corpus exercises either branch on real
+    data.
+  \item Section~\ref{sec:tuple-round5}'s full atomic-region grid is still an aggregate-metric
+    characterization: the matched per-video diff at the \code{default} point
+    (Table~\ref{tab:tuple-clustering}) was not re-run at all 20 grid points, only at the one
+    Round 4 already checked, since recall@$k$ aggregates are known to be able to mask a
+    minority-regression pattern like that one.
+\end{itemize}
+
+% =====================================================================
 \section{Summary of Corrections}
 \label{sec:corrections}
 % =====================================================================
@@ -659,6 +1334,18 @@ Refinement: ``get best score keyframes across all \emph{those} regions'' &
 \code{motion\_contrast\_weight} & 0.1 & \code{BoundaryHyperparameters} (motion signal itself unimplemented; always 0) \\
 semantic / boundary / pre / post weights (Eq.~\ref{eq:final-event-score}) & 0.4 / 0.3 / 0.1 / 0.2 & \code{BoundaryHyperparameters} \\
 default embedding model & SigLIP2 base patch16-224 & \code{embedding.py} \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Tuple ranking (Section~\ref{sec:tuple-ranking}, opt-in via \code{apply\_tuple\_ranking})}} \\
+\midrule
+\code{absolute\_threshold} ($\alpha$) & 0.0 & \code{TupleRankingHyperparameters} \\
+\code{relative\_delta} ($\delta$) & 0.15 & \code{TupleRankingHyperparameters} \\
+\code{max\_regions\_per\_event} ($N$) & 20 & \code{TupleRankingHyperparameters} \\
+\code{order\_weight} ($w_o$) & 0.8 & \code{TupleRankingHyperparameters} \\
+\code{pooling} & \code{"max"} & \code{TupleRankingHyperparameters} \\
+\code{confidence\_gate} & \code{"threshold"} & \code{TupleRankingHyperparameters} \\
+\code{confidence\_gate\_threshold} ($\tau$) & 0.5 & \code{TupleRankingHyperparameters} \\
+\code{max\_combinations\_per\_video} & 20{,}000 & \code{TupleRankingHyperparameters} \\
+\code{max\_tuples\_per\_video} & 20 & \code{TupleRankingHyperparameters} \\
 \bottomrule
 \end{longtable}
 

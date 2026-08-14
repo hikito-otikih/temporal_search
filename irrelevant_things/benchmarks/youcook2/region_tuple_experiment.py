@@ -1,39 +1,42 @@
 """Ablation sweep: does multi-region pooling + order-aware tuple scoring
-(region_tuple_ranking.py) beat today's production `prioritize_videos()`
-(independent per-event argmax) on real YouCook2 queries?
+(`adaptive_search.tuple_ranking`, the shipped production module) beat
+today's production `prioritize_videos()` (independent per-event argmax) on
+real YouCook2 queries?
 
-For each of n sample videos, fetch real upstream candidates ONCE, fuse and
-cluster ONCE (clustering hyperparameters are proven invariant to this
-question - see clustering_impact_benchmark.py in scratch/ - so they're held
-at defaults throughout), then compute:
+This driver imports the production algorithm directly (not a benchmark-tree
+duplicate) so results describe the exact code that ships, including both
+production correctness fixes: order constraints come from real
+`EventDefinition.temporal_relation`/`.reference_event_id` with transitive
+closure (`build_order_constraints`), not adjacent list position.
 
-  - rank_baseline: prioritize_videos()'s rank for the ground-truth video.
-  - hits_baseline: how many of the GT video's own events land inside their
-    ground-truth interval, using today's independent per-event best region
-    (select_event_seeds()'s own seed[0], the production seed).
-  - for every swept RegionTupleParams config: rank_tuple and hits_tuple,
-    same two questions, answered by the new algorithm instead.
+For each of n sample videos, fetch real upstream candidates ONCE, fuse ONCE,
+then build TWO region sets from that same fused pool - clustered
+(`cluster_temporal_regions`, the production default) and atomic (one
+`TemporalRegion` per candidate, no clustering at all - the "treat every
+keyframe as its own region" ablation condition) - and compute, against
+each:
 
-Both metrics are computed from the SAME fused/clustered candidate set for a
-paired, noise-free before/after comparison - no repeated network calls once
-data is fetched. Metrics reported with the repo's existing recall@k_new /
-final_query_score definitions (boundary_metrics.py) for direct comparability
-with prior benchmark docs.
+  - rank_baseline(_atomic): prioritize_videos()'s rank for the ground-truth
+    video.
+  - hits_baseline(_atomic): how many of the GT video's own events land
+    inside their ground-truth interval, using today's independent per-event
+    best region (select_event_seeds()'s own seed[0]).
+  - for every swept TupleRankingHyperparameters config: rank_tuple and
+    hits_tuple, same two questions, answered by tuple ranking instead.
+
+All metrics are computed from the SAME fetched candidate set for a paired,
+noise-free comparison - no repeated network calls once data is fetched.
+Metrics reported with the repo's existing recall@k_new / final_query_score
+definitions (boundary_metrics.py) for direct comparability with prior
+benchmark documents.
 
 Several configs use `temporal_relation` from `build_temporal_relations_cache.py`'s
-cached real LLM classification (--temporal-relations-cache) to build real
-directional order constraints (see region_tuple_ranking.py's
-`order_constraints`): for each event with relation "after"/"before" and a
-`reference_event_id`, a (predecessor, successor) pair is derived from that
-relation's actual direction - NOT from adjacent list position. This matters:
-an event listed earlier in the query array is not guaranteed to be the
-expected *predecessor* in time (a query can describe events out of
-chronological order, or - as happened on this specific corpus - always
-describe them in order; the constraint-building code must not assume either
-case). Events with relation "independent"/"simultaneous" (or no reference)
-contribute no constraint at all, matching an opt-out from today's blanket
-adjacent-pair check, not an opt-in - it only ever removes or redirects
-penalties, it doesn't invent stricter ones a query didn't ask for.
+cached real LLM classification (--temporal-relations-cache): cached per-event
+relation/reference data is used to build real `EventDefinition` objects and
+pass them through the production `build_order_constraints()` - the same
+function `router.py` calls for a live session - so this benchmark is not
+just testing the *algorithm* end to end, but this specific piece of
+production wiring as well.
 """
 
 from __future__ import annotations
@@ -42,21 +45,30 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .boundary_metrics import DEFAULT_KS, frame_hits
 from .coarse_anchor import WINNER_REFINEMENT_PARAMS, WINNER_RETRIEVAL_PARAMS, WINNER_UPSTREAM_TOP_K
 from .core import VideoQueryGroup, canonical_video_id, load_query_directory_grouped
-from .region_tuple_ranking import RegionTupleParams, rank_videos_by_region_tuples
 from adaptive_search.algorithms import cluster_temporal_regions, prioritize_videos
 from adaptive_search.boundary_seeds import select_event_seeds
 from adaptive_search.client import QueryVariant
 from adaptive_search.dependencies import upstream_search_client
 from adaptive_search.retrieval import fuse_candidates_rrf
+from adaptive_search.schemas import EventDefinition, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
+from adaptive_search.tuple_ranking import atomic_regions, build_order_constraints, rank_videos_by_region_tuples
 
-DEFAULT_PARAMS = RegionTupleParams()
+DEFAULT_PARAMS = TupleRankingHyperparameters()
+
+
+def _with(**overrides: Any) -> TupleRankingHyperparameters:
+    """`TupleRankingHyperparameters` is a Pydantic model, not a dataclass -
+    `dataclasses.replace()` doesn't apply; `.model_copy(update=...)` does."""
+    return DEFAULT_PARAMS.model_copy(update=overrides)
+
+
 # The N^event_count blowup only bites once pools are large; N<=20's default
 # cap of 20000 already truncates some real videos (20^4=160000 > 20000).
 # Raised generously for the N-scaling ablation so a larger N is measured on
@@ -67,54 +79,139 @@ _LARGE_N_MAX_COMBINATIONS = 500_000
 @dataclass(frozen=True)
 class SweepConfig:
     label: str
-    params: RegionTupleParams
+    params: TupleRankingHyperparameters
     use_temporal_relation: bool = False
+    use_atomic_regions: bool = False
 
 
 SWEEP_CONFIGS: list[SweepConfig] = [
-    SweepConfig("baseline_equivalent (order_weight=0)", replace(DEFAULT_PARAMS, order_weight=0.0)),
+    SweepConfig("baseline_equivalent (order_weight=0)", _with(order_weight=0.0)),
     SweepConfig("default", DEFAULT_PARAMS),
-    SweepConfig("delta=0.05", replace(DEFAULT_PARAMS, relative_delta=0.05)),
-    SweepConfig("delta=0.10", replace(DEFAULT_PARAMS, relative_delta=0.10)),
-    SweepConfig("delta=0.25", replace(DEFAULT_PARAMS, relative_delta=0.25)),
-    SweepConfig("delta=0.40", replace(DEFAULT_PARAMS, relative_delta=0.40)),
-    SweepConfig("N=1 (degenerate, no pooling)", replace(DEFAULT_PARAMS, max_regions_per_event=1)),
-    SweepConfig("N=2", replace(DEFAULT_PARAMS, max_regions_per_event=2)),
-    SweepConfig("N=3", replace(DEFAULT_PARAMS, max_regions_per_event=3)),
-    SweepConfig("N=5", replace(DEFAULT_PARAMS, max_regions_per_event=5)),
-    SweepConfig("N=10", replace(DEFAULT_PARAMS, max_regions_per_event=10)),
-    SweepConfig("N=20 (proposal's own cap)", replace(DEFAULT_PARAMS, max_regions_per_event=20)),
-    SweepConfig("N=30", replace(DEFAULT_PARAMS, max_regions_per_event=30, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
-    SweepConfig("N=50", replace(DEFAULT_PARAMS, max_regions_per_event=50, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
-    SweepConfig("N=100", replace(DEFAULT_PARAMS, max_regions_per_event=100, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
-    SweepConfig("N=200", replace(DEFAULT_PARAMS, max_regions_per_event=200, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
-    SweepConfig("order_weight=0.05", replace(DEFAULT_PARAMS, order_weight=0.05)),
-    SweepConfig("order_weight=0.2", replace(DEFAULT_PARAMS, order_weight=0.2)),
-    SweepConfig("order_weight=0.4", replace(DEFAULT_PARAMS, order_weight=0.4)),
-    SweepConfig("order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8)),
-    SweepConfig("pooling=mean", replace(DEFAULT_PARAMS, pooling="mean")),
-    # --- temporal_relation gating (needs --temporal-relations-cache) ---
+    SweepConfig("delta=0.05", _with(relative_delta=0.05)),
+    SweepConfig("delta=0.10", _with(relative_delta=0.10)),
+    SweepConfig("delta=0.25", _with(relative_delta=0.25)),
+    SweepConfig("delta=0.40", _with(relative_delta=0.40)),
+    SweepConfig("N=1 (degenerate, no pooling)", _with(max_regions_per_event=1)),
+    SweepConfig("N=2", _with(max_regions_per_event=2)),
+    SweepConfig("N=3", _with(max_regions_per_event=3)),
+    SweepConfig("N=5", _with(max_regions_per_event=5)),
+    SweepConfig("N=10", _with(max_regions_per_event=10)),
+    SweepConfig("N=20 (proposal's own cap)", _with(max_regions_per_event=20)),
+    SweepConfig("N=30", _with(max_regions_per_event=30, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
+    SweepConfig("N=50", _with(max_regions_per_event=50, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
+    SweepConfig("N=100", _with(max_regions_per_event=100, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
+    SweepConfig("N=200", _with(max_regions_per_event=200, max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS)),
+    SweepConfig("order_weight=0.05", _with(order_weight=0.05)),
+    SweepConfig("order_weight=0.2", _with(order_weight=0.2)),
+    SweepConfig("order_weight=0.4", _with(order_weight=0.4)),
+    SweepConfig("order_weight=0.8", _with(order_weight=0.8)),
+    SweepConfig("pooling=mean", _with(pooling="mean")),
+    # --- temporal_relation gating (needs --temporal-relations-cache; now via
+    # the real production build_order_constraints(), transitively closed) ---
     SweepConfig("temporal_relation-gated (default)", DEFAULT_PARAMS, use_temporal_relation=True),
-    SweepConfig("temporal_relation-gated, order_weight=0.4", replace(DEFAULT_PARAMS, order_weight=0.4), use_temporal_relation=True),
-    SweepConfig("temporal_relation-gated, order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8), use_temporal_relation=True),
-    SweepConfig("temporal_relation-gated, pooling=mean", replace(DEFAULT_PARAMS, pooling="mean"), use_temporal_relation=True),
-    # --- confidence gating ---
-    SweepConfig("confidence_gate=linear, order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8, confidence_gate="linear")),
-    SweepConfig("confidence_gate=threshold@0.3, order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.3)),
-    SweepConfig("confidence_gate=threshold@0.5, order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.5)),
-    SweepConfig("confidence_gate=threshold@0.7, order_weight=0.8", replace(DEFAULT_PARAMS, order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.7)),
+    SweepConfig("temporal_relation-gated, order_weight=0.4", _with(order_weight=0.4), use_temporal_relation=True),
+    SweepConfig("temporal_relation-gated, order_weight=0.8", _with(order_weight=0.8), use_temporal_relation=True),
+    SweepConfig("temporal_relation-gated, pooling=mean", _with(pooling="mean"), use_temporal_relation=True),
+    # --- confidence gating (DEFAULT_PARAMS already gates at threshold@0.5 -
+    # this "none" row is the Round-1-style ungated reference point, needed to
+    # show what gating is actually correcting, not assumed from n=30 alone) ---
+    SweepConfig("confidence_gate=none, order_weight=0.8", _with(order_weight=0.8, confidence_gate="none")),
+    SweepConfig("confidence_gate=linear, order_weight=0.8", _with(order_weight=0.8, confidence_gate="linear")),
+    SweepConfig("confidence_gate=threshold@0.3, order_weight=0.8", _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.3)),
+    SweepConfig("confidence_gate=threshold@0.5, order_weight=0.8", _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.5)),
+    SweepConfig("confidence_gate=threshold@0.7, order_weight=0.8", _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.7)),
     # --- combined: temporal_relation + confidence gating together ---
     SweepConfig(
         "temporal_relation + confidence_gate=linear, order_weight=0.8",
-        replace(DEFAULT_PARAMS, order_weight=0.8, confidence_gate="linear"),
+        _with(order_weight=0.8, confidence_gate="linear"),
         use_temporal_relation=True,
     ),
     SweepConfig(
         "temporal_relation + pooling=mean + confidence_gate=linear, order_weight=0.8",
-        replace(DEFAULT_PARAMS, order_weight=0.8, pooling="mean", confidence_gate="linear"),
+        _with(order_weight=0.8, pooling="mean", confidence_gate="linear"),
+        use_temporal_relation=True,
+    ),
+    # --- production shipped default (threshold@0.5, order_weight=0.8),
+    # with temporal_relation now wired in too - the actual live configuration ---
+    SweepConfig(
+        "production (threshold@0.5, order_weight=0.8) + temporal_relation",
+        _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.5),
+        use_temporal_relation=True,
+    ),
+    # --- no-clustering ablation: does Stage 3 (cluster_temporal_regions)
+    # matter for tuple ranking specifically, unlike the already-proven
+    # invariance of the independent-argmax baseline? ---
+    SweepConfig("no-clustering (atomic regions), default", DEFAULT_PARAMS, use_atomic_regions=True),
+    SweepConfig("no-clustering (atomic regions), N=1", _with(max_regions_per_event=1), use_atomic_regions=True),
+    SweepConfig("no-clustering (atomic regions), N=5", _with(max_regions_per_event=5), use_atomic_regions=True),
+    SweepConfig("no-clustering (atomic regions), N=20", _with(max_regions_per_event=20), use_atomic_regions=True),
+    SweepConfig(
+        "no-clustering (atomic regions), production (threshold@0.5, ow=0.8)",
+        _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.5),
+        use_atomic_regions=True,
+    ),
+    SweepConfig("no-clustering (atomic regions), pooling=mean", _with(pooling="mean"), use_atomic_regions=True),
+    # --- the one combo not yet tested: does the atomic-region win at
+    # production hyperparameters (Table above) hold up once temporal_relation
+    # gating - the actual shipped default - is layered on top too? ---
+    SweepConfig(
+        "no-clustering (atomic regions), production (threshold@0.5, ow=0.8) + temporal_relation",
+        _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=0.5),
+        use_atomic_regions=True,
         use_temporal_relation=True,
     ),
 ]
+
+# --- fine-grained tau sweep, both confidence signals (mean region score via
+# "threshold", vs. chosen-region-vs-runner-up "margin" - see tuple_ranking.py
+# _region_margin) - 19-point grid (step 0.05) each, at order_weight=0.8,
+# generated rather than hand-listed to keep the two signals' grids identical
+# and to make it cheap to widen later. ---
+_TAU_GRID: tuple[float, ...] = tuple(round(0.05 * i, 2) for i in range(1, 20))  # 0.05 .. 0.95
+
+_TAU_SWEEP_CONFIGS: list[SweepConfig] = [
+    SweepConfig(
+        f"confidence_gate=threshold@{tau:.2f}, order_weight=0.8 (fine sweep)",
+        _with(order_weight=0.8, confidence_gate="threshold", confidence_gate_threshold=tau),
+    )
+    for tau in _TAU_GRID
+] + [
+    SweepConfig(
+        f"confidence_gate=margin@{tau:.2f}, order_weight=0.8 (fine sweep)",
+        _with(order_weight=0.8, confidence_gate="margin", confidence_gate_threshold=tau),
+    )
+    for tau in _TAU_GRID
+]
+
+# --- full atomic-region grid: the same delta/N/order_weight points Rounds
+# 1-2 swept under clustering, now also run with clustering skipped entirely,
+# to characterize the clustering interaction at every setting, not just the
+# default/N=1/N=5/N=20/production/pooling=mean spot checks above. Points
+# already covered by those spot checks (delta=0.15 default, N in {1,5,20},
+# order_weight=0.8) are not repeated. ---
+_ATOMIC_GRID_CONFIGS: list[SweepConfig] = (
+    [
+        SweepConfig(f"no-clustering (atomic), delta={d}", _with(relative_delta=d), use_atomic_regions=True)
+        for d in (0.05, 0.10, 0.25, 0.40)
+    ]
+    + [
+        SweepConfig(
+            f"no-clustering (atomic), N={n}",
+            _with(
+                max_regions_per_event=n,
+                max_combinations_per_video=_LARGE_N_MAX_COMBINATIONS if n > 20 else DEFAULT_PARAMS.max_combinations_per_video,
+            ),
+            use_atomic_regions=True,
+        )
+        for n in (2, 3, 10, 30, 50, 100, 200)
+    ]
+    + [
+        SweepConfig(f"no-clustering (atomic), order_weight={ow}", _with(order_weight=ow), use_atomic_regions=True)
+        for ow in (0.05, 0.2, 0.4)
+    ]
+)
+
+SWEEP_CONFIGS = SWEEP_CONFIGS + _TAU_SWEEP_CONFIGS + _ATOMIC_GRID_CONFIGS
 
 
 def load_temporal_relations_cache(path: Path) -> dict[str, list[dict[str, Any]]]:
@@ -132,42 +229,48 @@ def load_temporal_relations_cache(path: Path) -> dict[str, list[dict[str, Any]]]
     return cache
 
 
-def order_constraints_from_relations(
-    events: list[dict[str, Any]] | None, event_count: int
-) -> list[tuple[int, int]] | None:
-    """(predecessor_index, successor_index) pairs derived from each event's
-    real `relation`/`reference_event_id`, direction included - NOT from
-    adjacent list position (see module docstring and region_tuple_ranking.py
-    `_order_score`'s docstring for why that distinction is load-bearing).
-
-    "after" with reference r on event i: expect t(r) < t(i) -> (r, i).
-    "before" with reference r on event i: expect t(i) < t(r) -> (i, r).
-    "sequence_start"/"during"/"simultaneous"/"independent"/"unknown", or a
-    null reference: no constraint from this event.
+def events_with_relations_from_cache(
+    cached_events: list[dict[str, Any]] | None, event_ids: list[str]
+) -> list[EventDefinition] | None:
+    """Build real `EventDefinition`s (with `temporal_relation`/
+    `reference_event_id`) from one video's cached rewrite classification, so
+    the benchmark can call the exact same `build_order_constraints()`
+    `router.py` calls for a live session - not a reimplementation.
 
     None (no cached classification for this video, e.g. the rewrite call
-    failed) falls back to the adjacent-list-position chain, i.e. today's
-    blanket behavior - see `_order_score`'s own None handling."""
+    failed) propagates through to `build_order_constraints`'s own None
+    handling, which falls back to the adjacent-list-position chain."""
 
-    if events is None or len(events) != event_count:
+    if cached_events is None or len(cached_events) != len(event_ids):
         return None
-    constraints: list[tuple[int, int]] = []
-    for event in events:
-        relation = event["relation"]
-        reference = event["reference_event_id"]
-        index = event["event_id"]
-        if reference is None:
-            continue
-        if relation == "after":
-            constraints.append((reference, index))
-        elif relation == "before":
-            constraints.append((index, reference))
-    return constraints
+    by_index = {event["event_id"]: event for event in cached_events}
+    events: list[EventDefinition] = []
+    for index, event_id in enumerate(event_ids):
+        cached = by_index.get(index)
+        if cached is None:
+            return None
+        reference = cached["reference_event_id"]
+        events.append(
+            EventDefinition(
+                event_id=event_id,
+                original_query=event_id,
+                anchor_query=event_id,
+                temporal_relation=cached["relation"],
+                reference_event_id=event_ids[reference] if reference is not None else None,
+            )
+        )
+    return events
 
 
-def _baseline_gt_hits(
+def _baseline_rank_and_hits(
     group: VideoQueryGroup, regions, candidates_by_id, event_ids: list[str]
-) -> int:
+) -> tuple[int | None, int]:
+    priorities = prioritize_videos(regions, event_ids, WINNER_REFINEMENT_PARAMS)
+    rank = next(
+        (pos for pos, p in enumerate(priorities, 1)
+         if canonical_video_id(p.video_id) == group.video_id),
+        None,
+    )
     anchors: dict[str, float] = {}
     for event_id in event_ids:
         seeds = select_event_seeds(
@@ -176,7 +279,7 @@ def _baseline_gt_hits(
         )
         if seeds:
             anchors[event_id] = seeds[0]
-    return frame_hits(group, anchors)
+    return rank, frame_hits(group, anchors)
 
 
 def _tuple_gt_hits(
@@ -227,30 +330,30 @@ def run_sweep(
             session_id=session_id, variants=variants, top_k=WINNER_UPSTREAM_TOP_K
         )
         fused = fuse_candidates_rrf(candidates, WINNER_RETRIEVAL_PARAMS)
-        regions = cluster_temporal_regions(fused)
         candidates_by_id = {c.id: c for c in fused}
 
-        priorities = prioritize_videos(regions, event_ids, WINNER_REFINEMENT_PARAMS)
-        rank_baseline = next(
-            (pos for pos, p in enumerate(priorities, 1)
-             if canonical_video_id(p.video_id) == group.video_id),
-            None,
-        )
-        unique_video_count = len(priorities)
-        hits_baseline = _baseline_gt_hits(group, regions, candidates_by_id, event_ids)
+        clustered = cluster_temporal_regions(fused)
+        atomic = atomic_regions(fused)
 
-        constraints = order_constraints_from_relations(relations_cache.get(group.video_id), len(event_ids))
+        rank_baseline, hits_baseline = _baseline_rank_and_hits(group, clustered, candidates_by_id, event_ids)
+        rank_baseline_atomic, hits_baseline_atomic = _baseline_rank_and_hits(group, atomic, candidates_by_id, event_ids)
+
+        events = events_with_relations_from_cache(relations_cache.get(group.video_id), event_ids)
+        constraints = build_order_constraints(events) if events is not None else None
 
         row: dict[str, Any] = {
             "video_id": group.video_id,
             "event_count": len(event_ids),
-            "unique_video_count": unique_video_count,
+            "unique_video_count": len({r.video_id for r in clustered}),
             "rank_baseline": rank_baseline,
             "hits_baseline": hits_baseline,
+            "rank_baseline_atomic": rank_baseline_atomic,
+            "hits_baseline_atomic": hits_baseline_atomic,
             "order_constraints": constraints,
             "variants": {},
         }
         for config in SWEEP_CONFIGS:
+            regions = atomic if config.use_atomic_regions else clustered
             pairs = constraints if config.use_temporal_relation else None
             ranking, tuples_by_video = rank_videos_by_region_tuples(
                 regions, candidates_by_id, event_ids, config.params, pairs

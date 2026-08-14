@@ -3,11 +3,19 @@ from __future__ import annotations
 import unittest
 
 from adaptive_search.algorithms import prioritize_videos
-from adaptive_search.schemas import RefinementHyperparameters, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
+from adaptive_search.schemas import (
+    EventDefinition,
+    RefinementHyperparameters,
+    SparseCandidate,
+    TemporalRegion,
+    TupleRankingHyperparameters,
+)
 from adaptive_search.tuple_ranking import (
     _effective_order_weight,
     _order_score,
+    _region_margin,
     assemble_region_tuples_for_video,
+    build_order_constraints,
     pool_event_regions,
     rank_videos_by_region_tuples,
 )
@@ -258,6 +266,68 @@ class ConfidenceGateTests(unittest.TestCase):
         self.assertGreater(tuple_linear.score, tuple_none.score)
 
 
+class RegionMarginTests(unittest.TestCase):
+    def test_top_region_margin_is_gap_to_runner_up(self) -> None:
+        pool = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.9),
+            _region("r2", event_id="e1", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.6),
+            _region("r3", event_id="e1", video_id="v1", candidate_ids=["c3"], normalized_coarse_score=0.5),
+        ]
+        self.assertAlmostEqual(_region_margin(pool[0], pool), 0.9 - 0.6)
+
+    def test_non_top_region_margin_is_negative(self) -> None:
+        pool = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.9),
+            _region("r2", event_id="e1", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.6),
+        ]
+        # Choosing the worse-scoring region: margin is how much WORSE this
+        # specific pick is than the pool's best alternative, not the pool's
+        # own top-vs-runner-up gap - a tuple reaching past the top region
+        # (to satisfy the order term) should read as less confident, not
+        # equally confident as if it had picked the top region.
+        self.assertAlmostEqual(_region_margin(pool[1], pool), 0.6 - 0.9)
+
+    def test_single_member_pool_margin_is_its_own_score(self) -> None:
+        pool = [_region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.7)]
+        self.assertAlmostEqual(_region_margin(pool[0], pool), 0.7)
+
+    def test_margin_gate_uses_margin_not_mean_score(self) -> None:
+        # Two regions per event, both events tied at the same absolute score
+        # (0.8) - region_mean_score is identical for every combination, so
+        # only a margin-aware gate can distinguish "the obvious best pick,
+        # confidently" from "reaching past a close second choice."
+        regions = [
+            _region("r1a", event_id="e1", video_id="v1", candidate_ids=["c1a"], normalized_coarse_score=0.8),
+            _region("r1b", event_id="e1", video_id="v1", candidate_ids=["c1b"], normalized_coarse_score=0.3),
+            _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.8),
+        ]
+        candidates_by_id = {
+            "c1a": _candidate("c1a", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c1b": _candidate("c1b", event_id="e1", video_id="v1", timestamp_seconds=1.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=5.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, order_weight=0.5,
+            confidence_gate="margin", confidence_gate_threshold=0.4,
+        )
+        tuples = assemble_region_tuples_for_video("v1", ["e1", "e2"], regions, candidates_by_id, params)
+        by_ids = {t.region_ids: t for t in tuples}
+        top_pick = by_ids[("r1a", "r2")]
+        reach_pick = by_ids[("r1b", "r2")]
+        # Mean margin: top_pick = mean(0.8-0.3, 0.8) = 0.65 (e1's margin as
+        # the pool's top scorer, plus e2's single-candidate "nothing to
+        # compare against" margin of its own score) -> above the 0.4 gate,
+        # order bonus applied. reach_pick = mean(0.3-0.8, 0.8) = 0.15 (e1's
+        # margin as a worse-than-top pick is NEGATIVE) -> below the gate,
+        # order bonus suppressed. Both branches have very different
+        # region_mean_score (0.8 vs 0.55) too, so this specifically checks
+        # the GATE reads margin_score, not that scores differ at all.
+        self.assertGreaterEqual(top_pick.margin_score, 0.4)
+        self.assertLess(reach_pick.margin_score, 0.4)
+        self.assertAlmostEqual(top_pick.score, top_pick.region_mean_score + 0.5 * top_pick.order_score)
+        self.assertAlmostEqual(reach_pick.score, reach_pick.region_mean_score)
+
+
 class RankVideosByRegionTuplesTests(unittest.TestCase):
     def test_order_weight_zero_matches_prioritize_videos_ranking(self) -> None:
         regions = [
@@ -307,6 +377,87 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
             if timestamp is not None
         }
         self.assertEqual(anchors, {"e1": 10.0, "e2": 20.0})
+
+
+def _event(event_id, *, relation="unknown", reference=None):
+    return EventDefinition(
+        event_id=event_id,
+        original_query=event_id,
+        anchor_query=event_id,
+        temporal_relation=relation,
+        reference_event_id=reference,
+    )
+
+
+class BuildOrderConstraintsTests(unittest.TestCase):
+    def test_no_relation_data_anywhere_returns_none(self) -> None:
+        events = [_event("e1"), _event("e2"), _event("e3")]
+        self.assertIsNone(build_order_constraints(events))
+
+    def test_after_produces_reference_then_event_edge(self) -> None:
+        events = [_event("e1"), _event("e2", relation="after", reference="e1")]
+        self.assertEqual(build_order_constraints(events), [(0, 1)])
+
+    def test_before_produces_event_then_reference_edge(self) -> None:
+        events = [_event("e1"), _event("e2", relation="before", reference="e1")]
+        # e2 before e1 -> e2 (index 1) precedes e1 (index 0).
+        self.assertEqual(build_order_constraints(events), [(1, 0)])
+
+    def test_during_and_simultaneous_produce_no_edge(self) -> None:
+        events = [
+            _event("e1"),
+            _event("e2", relation="during", reference="e1"),
+            _event("e3", relation="simultaneous", reference="e1"),
+        ]
+        self.assertEqual(build_order_constraints(events), [])
+
+    def test_independent_and_sequence_start_produce_no_edge(self) -> None:
+        events = [
+            _event("e1", relation="sequence_start"),
+            _event("e2", relation="independent"),
+        ]
+        self.assertEqual(build_order_constraints(events), [])
+
+    def test_transitive_closure_adds_the_implied_non_adjacent_pair(self) -> None:
+        # e2 after e1, e3 after e2 -> direct edges (0,1) and (1,2), but also
+        # the implied (0,2): e1 must precede e3 even though no event
+        # references e1 and e3 directly against each other.
+        events = [
+            _event("e1"),
+            _event("e2", relation="after", reference="e1"),
+            _event("e3", relation="after", reference="e2"),
+        ]
+        constraints = build_order_constraints(events)
+        self.assertEqual(set(constraints), {(0, 1), (1, 2), (0, 2)})
+
+    def test_this_is_the_scenario_a_naive_list_position_check_gets_backwards(self) -> None:
+        # e1 (index 0) is listed first but is explicitly "after" e4 (index 3)
+        # - the transitive-closure-aware builder must derive (3, 0), the
+        # opposite direction a list-position default would assume.
+        events = [
+            _event("e1", relation="after", reference="e4"),
+            _event("e2"),
+            _event("e3"),
+            _event("e4", relation="sequence_start"),
+        ]
+        self.assertIn((3, 0), build_order_constraints(events))
+        self.assertNotIn((0, 3), build_order_constraints(events))
+
+    def test_dangling_reference_to_unknown_event_id_is_ignored(self) -> None:
+        events = [_event("e1", relation="after", reference="does_not_exist")]
+        self.assertEqual(build_order_constraints(events), [])
+
+    def test_end_to_end_with_router_style_order_score_direction(self) -> None:
+        # Reproduces the exact scenario a reviewer flagged for _order_score
+        # directly, but built from real EventDefinition/build_order_constraints
+        # end to end instead of a hand-written constraint list.
+        events = [
+            _event("e1", relation="after", reference="e2"),
+            _event("e2", relation="sequence_start"),
+        ]
+        constraints = build_order_constraints(events)
+        timestamps = [1.0, 4.0]  # e1 precedes e2 in time - violates "e1 after e2"
+        self.assertEqual(_order_score(timestamps, constraints), -1.0)
 
 
 if __name__ == "__main__":

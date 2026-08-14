@@ -46,6 +46,7 @@ def build_session_plan(
     retrieval_variants: dict[str, tuple[str, ...]] = {}
     for index, event in enumerate(analysis.events):
         event_id = f"evt{index}"
+        relation = event.temporal_relation
         events.append(
             EventDefinition(
                 event_id=event_id,
@@ -54,6 +55,12 @@ def build_session_plan(
                 pre_state=event.pre_state,
                 post_state=event.post_state,
                 boundary_type=_boundary_type(event.boundary),
+                temporal_relation=relation.relation,
+                reference_event_id=(
+                    f"evt{relation.reference_event_id}"
+                    if relation.reference_event_id is not None
+                    else None
+                ),
             )
         )
         retrieval_variants[event_id] = tuple(

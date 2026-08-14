@@ -73,8 +73,13 @@ class FakeEmbedder:
         return l2_normalize(np.asarray(images, dtype=np.float32))
 
 
-def event(event_id, text):
-    return {"event_id": event_id, "original_query": text, "anchor_query": text}
+def event(event_id, text, *, temporal_relation=None, reference_event_id=None):
+    payload = {"event_id": event_id, "original_query": text, "anchor_query": text}
+    if temporal_relation is not None:
+        payload["temporal_relation"] = temporal_relation
+    if reference_event_id is not None:
+        payload["reference_event_id"] = reference_event_id
+    return payload
 
 
 def candidate(candidate_id, session_id, event_id, video_id, timestamp_seconds, raw_relevance_score):
@@ -219,6 +224,45 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.assertEqual(tuple_events["e2"]["anchor_seconds"], 60.0)
         self.assertEqual(tuple_events["e1"]["source"], "tuple_ranking")
         self.assertEqual(tuple_events["e2"]["source"], "tuple_ranking")
+
+    def test_uses_real_temporal_relation_direction_not_list_position(self):
+        # e1 is listed FIRST but is explicitly "after" e2 (relation direction
+        # disagreeing with list position - exactly the scenario the list-
+        # position-only implementation would have gotten backwards). e1 has
+        # two candidates: 5.0 (best score, but chronologically BEFORE e2's
+        # 50.0 - violates "e1 after e2") and 80.0 (worse score, but AFTER
+        # e2's 50.0 - satisfies the relation). A relation-aware, ungated
+        # order bonus should prefer 80.0; a list-position default would have
+        # preferred 5.0 (treating "e1 then e2" as the expected order, which
+        # is not what this session's relation actually claims).
+        session_id = self._create_session(
+            [
+                event("e1", "cut onion", temporal_relation="after", reference_event_id="e2"),
+                event("e2", "fry onion", temporal_relation="sequence_start"),
+            ],
+            tuple_ranking_overrides={"relative_delta": 1.0, "order_weight": 0.8, "confidence_gate": "none"},
+        )
+        self._submit_candidates(
+            session_id, ["e1", "e2"],
+            [
+                candidate("c1", session_id, "e1", "video_full", 5.0, 0.9),
+                candidate("c2", session_id, "e1", "video_full", 80.0, 0.5),
+                candidate("c3", session_id, "e2", "video_full", 50.0, 0.9),
+            ],
+        )
+        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
+        boundary_refinement_runtime.embedder = FakeEmbedder()
+
+        response = self.client.get(
+            f"/v1/search-sessions/{session_id}/video-priorities",
+            params={"apply_boundary_refinement": "true", "apply_tuple_ranking": "true"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        events = {
+            e["event_id"]: e for e in response.json()["items"][0]["boundary_refinement"]["events"]
+        }
+        self.assertEqual(events["e1"]["anchor_seconds"], 80.0)
+        self.assertEqual(events["e2"]["anchor_seconds"], 50.0)
 
     def test_user_fixed_frame_still_wins_over_tuple_ranking(self):
         # commands/fix-frame's authoritative-constraint short-circuit must

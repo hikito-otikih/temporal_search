@@ -1,0 +1,109 @@
+\relax 
+\catcode 95\active
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand*\HyPL@Entry[1]{}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Pipeline Overview}{2}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Stage 1: LLM Query Rewriting}{3}{section.2}\protected@file@percent }
+\newlabel{sec:stage1}{{2}{3}{Stage 1: LLM Query Rewriting}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}What it does}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Context propagation (``combine shared semantic of queries with each query'')}{4}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Worked example}{4}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:stage1-example}{{2.3}{4}{Worked example}{subsection.2.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Stage 2: Per-Variant Sparse Retrieval and RRF Fusion}{5}{section.3}\protected@file@percent }
+\newlabel{sec:stage2}{{3}{5}{Stage 2: Per-Variant Sparse Retrieval and RRF Fusion}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Retrieval}{5}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Reciprocal Rank Fusion}{5}{subsection.3.2}\protected@file@percent }
+\newlabel{eq:rrf}{{1}{5}{Reciprocal Rank Fusion}{equation.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Worked example}{6}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Stage 3: Temporal Region Clustering}{6}{section.4}\protected@file@percent }
+\newlabel{sec:stage3}{{4}{6}{Stage 3: Temporal Region Clustering}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Clustering}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Region scoring}{6}{subsection.4.2}\protected@file@percent }
+\newlabel{eq:region-raw}{{2}{6}{Region scoring}{equation.2}{}}
+\newlabel{eq:region-norm}{{3}{6}{Region scoring}{equation.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Merging}{6}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Worked example}{7}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Stage 4: Video Prioritization}{7}{section.5}\protected@file@percent }
+\newlabel{sec:stage4}{{5}{7}{Stage 4: Video Prioritization}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Per-event, per-video best score}{7}{subsection.5.1}\protected@file@percent }
+\newlabel{eq:best-event-score}{{4}{7}{Per-event, per-video best score}{equation.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Combining across events}{7}{subsection.5.2}\protected@file@percent }
+\newlabel{eq:priority}{{9}{7}{Combining across events}{equation.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}\textbf  {\textcolor {red!60!black}{There is no cross-event ``candidate tuple'' at this stage}}}{8}{subsection.5.3}\protected@file@percent }
+\newlabel{sec:no-tuple}{{5.3}{8}{\corr {There is no cross-event ``candidate tuple'' at this stage}}{subsection.5.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Worked example}{8}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Stage 5 (opt-in): Per-Event Boundary Refinement}{9}{section.6}\protected@file@percent }
+\newlabel{sec:stage5}{{6}{9}{Stage 5 (opt-in): Per-Event Boundary Refinement}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Seed selection}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Native-fps neighborhood search}{9}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Text--image scoring}{9}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Boundary-profile-aware proposal scoring}{9}{subsection.6.4}\protected@file@percent }
+\newlabel{eq:final-event-score}{{11}{10}{Boundary-profile-aware proposal scoring}{equation.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}Independence and its consequence}{10}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}User-fix short-circuit}{10}{subsection.6.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Worked example}{10}{subsection.6.7}\protected@file@percent }
+\newlabel{sec:stage5-example}{{6.7}{10}{Worked example}{subsection.6.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Stage 6: Interactive Correction}{11}{section.7}\protected@file@percent }
+\newlabel{sec:stage6}{{7}{11}{Stage 6: Interactive Correction}{section.7}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Methodology: Multi-Region Pooling and Order-Aware Tuple Ranking}{12}{section.8}\protected@file@percent }
+\newlabel{sec:tuple-ranking}{{8}{12}{Methodology: Multi-Region Pooling and Order-Aware Tuple Ranking}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Motivation}{12}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Design}{12}{subsection.8.2}\protected@file@percent }
+\newlabel{sec:tuple-design}{{8.2}{12}{Design}{subsection.8.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.1}Multi-region pooling}{12}{subsubsection.8.2.1}\protected@file@percent }
+\newlabel{eq:pool}{{12}{12}{Multi-region pooling}{equation.12}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.2}Tuple assembly and order scoring}{12}{subsubsection.8.2.2}\protected@file@percent }
+\newlabel{eq:order-score}{{13}{13}{Tuple assembly and order scoring}{equation.13}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.3}Confidence-gated order weight}{13}{subsubsection.8.2.3}\protected@file@percent }
+\newlabel{eq:gate}{{14}{13}{Confidence-gated order weight}{equation.14}{}}
+\newlabel{eq:tuple-score}{{15}{13}{Confidence-gated order weight}{equation.15}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.2.4}Correctness invariant}{14}{subsubsection.8.2.4}\protected@file@percent }
+\newlabel{sec:tuple-invariant}{{8.2.4}{14}{Correctness invariant}{subsubsection.8.2.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Experimental Methodology}{14}{subsection.8.3}\protected@file@percent }
+\newlabel{sec:tuple-experiment}{{8.3}{14}{Experimental Methodology}{subsection.8.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.1}Round 1: core proposal ablation}{14}{subsubsection.8.3.1}\protected@file@percent }
+\newlabel{sec:tuple-round1}{{8.3.1}{14}{Round 1: core proposal ablation}{subsubsection.8.3.1}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.2}Round 2: relation-aware constraints, confidence gating, deeper pooling}{14}{subsubsection.8.3.2}\protected@file@percent }
+\newlabel{sec:tuple-round2}{{8.3.2}{14}{Round 2: relation-aware constraints, confidence gating, deeper pooling}{subsubsection.8.3.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.3}Round 3: a correctness fix, re-validated}{15}{subsubsection.8.3.3}\protected@file@percent }
+\newlabel{sec:tuple-round3}{{8.3.3}{15}{Round 3: a correctness fix, re-validated}{subsubsection.8.3.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.4}Round 4: two limitations closed, $n$ doubled to 60, a no-clustering ablation}{15}{subsubsection.8.3.4}\protected@file@percent }
+\newlabel{sec:tuple-round4}{{8.3.4}{15}{Round 4: two limitations closed, $n$ doubled to 60, a no-clustering ablation}{subsubsection.8.3.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.5}Round 5: fine-grained $\tau $ sweep and the full atomic-region grid}{15}{subsubsection.8.3.5}\protected@file@percent }
+\newlabel{sec:tuple-round5}{{8.3.5}{15}{Round 5: fine-grained $\tau $ sweep and the full atomic-region grid}{subsubsection.8.3.5}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.3.6}Round 6: the missing combo, and the production switch to atomic regions}{15}{subsubsection.8.3.6}\protected@file@percent }
+\newlabel{sec:tuple-round6}{{8.3.6}{15}{Round 6: the missing combo, and the production switch to atomic regions}{subsubsection.8.3.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Results}{16}{subsection.8.4}\protected@file@percent }
+\newlabel{sec:tuple-results}{{8.4}{16}{Results}{subsection.8.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Round 1, $n=30$. Full sweep: \texttt  {\footnotesize  region\_tuple\_ranking\_results.md}.}}{16}{table.caption.2}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:tuple-round1}{{1}{16}{Round 1, $n=30$. Full sweep: \file {region\_tuple\_ranking\_results.md}}{table.caption.2}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Confidence-gate comparison, $n=30$, Round 2/3 (post-fix, byte-identical to pre-fix). $\tau {=}0.5$ fully recovers r@50/r@100 to baseline while retaining every head-of-list gain.}}{16}{table.caption.3}\protected@file@percent }
+\newlabel{tab:tuple-gate}{{2}{16}{Confidence-gate comparison, $n=30$, Round 2/3 (post-fix, byte-identical to pre-fix). $\tau {=}0.5$ fully recovers r@50/r@100 to baseline while retaining every head-of-list gain}{table.caption.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Ground-truth video rank (lower is better) for the five videos regressing under an ungated order bonus, before and after confidence-gating.}}{17}{table.caption.4}\protected@file@percent }
+\newlabel{tab:tuple-regression-fix}{{3}{17}{Ground-truth video rank (lower is better) for the five videos regressing under an ungated order bonus, before and after confidence-gating}{table.caption.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Round 4, $n=60$. Full sweep (37 configs): \texttt  {\footnotesize  region\_tuple\_sweep\_n60\_v2.jsonl}.}}{17}{table.caption.5}\protected@file@percent }
+\newlabel{tab:tuple-n60}{{4}{17}{Round 4, $n=60$. Full sweep (37 configs): \file {region\_tuple\_sweep\_n60\_v2.jsonl}}{table.caption.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Per-video effect of skipping Stage 3 entirely (clustered vs.\ atomic regions), $n=60$.}}{18}{table.caption.6}\protected@file@percent }
+\newlabel{tab:tuple-clustering}{{5}{18}{Per-video effect of skipping Stage 3 entirely (clustered vs.\ atomic regions), $n=60$}{table.caption.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Fine-grained $\tau $ sweep (\texttt  {\small  final\_query\_score}), both signals, $n=60$; 10 of 19 points shown, full grid in the source file. Baseline $=1.2133$.}}{18}{table.caption.7}\protected@file@percent }
+\newlabel{tab:tuple-tau}{{6}{18}{Fine-grained $\tau $ sweep (\code {final\_query\_score}), both signals, $n=60$; 10 of 19 points shown, full grid in the source file. Baseline $=1.2133$}{table.caption.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Full clustered-vs-atomic grid (\texttt  {\small  final\_query\_score}), $n=60$; 10 of 20 matched points shown, full grid in the source file.}}{19}{table.caption.8}\protected@file@percent }
+\newlabel{tab:tuple-atomic-grid}{{7}{19}{Full clustered-vs-atomic grid (\code {final\_query\_score}), $n=60$; 10 of 20 matched points shown, full grid in the source file}{table.caption.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces The missing combo, $n=60$. Full sweep (92 configs): \texttt  {\footnotesize  region\_tuple\_sweep\_n60\_v4.jsonl}.}}{19}{table.caption.9}\protected@file@percent }
+\newlabel{tab:tuple-round6}{{8}{19}{The missing combo, $n=60$. Full sweep (92 configs): \file {region\_tuple\_sweep\_n60\_v4.jsonl}}{table.caption.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Production Integration}{20}{subsection.8.5}\protected@file@percent }
+\newlabel{sec:tuple-integration}{{8.5}{20}{Production Integration}{subsection.8.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}Limitations}{20}{subsection.8.6}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {1}{146.92793pt}\LT@entry 
+    {1}{306.64291pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Summary of Corrections}{21}{section.9}\protected@file@percent }
+\newlabel{sec:corrections}{{9}{21}{Summary of Corrections}{section.9}{}}
+\gdef \LT@ii {\LT@entry 
+    {1}{193.89914pt}\LT@entry 
+    {1}{87.16252pt}\LT@entry 
+    {1}{184.5092pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {10}Hyperparameter Reference}{22}{section.10}\protected@file@percent }
+\gdef \@abspage@last{23}
