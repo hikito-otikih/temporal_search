@@ -52,13 +52,13 @@ from typing import Any
 from .boundary_metrics import DEFAULT_KS, frame_hits
 from .coarse_anchor import WINNER_REFINEMENT_PARAMS, WINNER_RETRIEVAL_PARAMS, WINNER_UPSTREAM_TOP_K
 from .core import VideoQueryGroup, canonical_video_id, load_query_directory_grouped
-from adaptive_search.algorithms import cluster_temporal_regions, prioritize_videos
+from adaptive_search.algorithms import atomic_regions, cluster_temporal_regions, prioritize_videos
 from adaptive_search.boundary_seeds import select_event_seeds
 from adaptive_search.client import QueryVariant
 from adaptive_search.dependencies import upstream_search_client
 from adaptive_search.retrieval import fuse_candidates_rrf
 from adaptive_search.schemas import EventDefinition, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
-from adaptive_search.tuple_ranking import atomic_regions, build_order_constraints, rank_videos_by_region_tuples
+from adaptive_search.tuple_ranking import build_order_constraints, rank_videos_by_region_tuples
 
 DEFAULT_PARAMS = TupleRankingHyperparameters()
 

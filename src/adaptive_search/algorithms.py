@@ -181,11 +181,53 @@ def _candidate_normalized_scores_by_event(
         normalized.update(_candidate_normalized_scores(group))
     return normalized
 
+def atomic_regions(candidates: Sequence[SparseCandidate]) -> list[TemporalRegion]:
+    """One `TemporalRegion` per candidate - no clustering at all.
+
+    Used for the tuple-ranking region pool only (`router.py`), not for
+    `bundle.artifacts.regions` generally. Clustering (`cluster_temporal_regions`,
+    below) was verified, not assumed, to have zero effect on both
+    `prioritize_videos()` and `select_event_seeds()` (each reduces to "the
+    single best-scoring raw candidate," an identity clustering can regroup
+    but not change - every (event, video) pair's top seed was byte-identical
+    between clustered and atomic input across a real n=60 corpus, so real
+    boundary refinement is provably identical too) and a small net *positive*
+    for order-aware tuple ranking specifically (`region_tuple_ranking_results.md`).
+    It is deliberately *not* used for `bundle.artifacts.regions` itself:
+    `replace_frame_scores` requires a submitted frame score's timestamp to
+    fall within its region's `[start_seconds, end_seconds]` span, which a
+    single-instant atomic region (`start == end`) cannot satisfy for any
+    timestamp but its own candidate's - confirmed by real test failures when
+    this was tried. Clustering still runs for every other consumer.
+    """
+
+    normalized_by_id = _candidate_normalized_scores_by_event(candidates)
+    return [
+        TemporalRegion(
+            id=f"atomic_{candidate.id}",
+            session_id=candidate.session_id,
+            event_id=candidate.event_id,
+            video_id=candidate.video_id,
+            start_seconds=candidate.timestamp_seconds,
+            end_seconds=candidate.timestamp_seconds,
+            candidate_ids=(candidate.id,),
+            raw_coarse_score=candidate.raw_relevance_score,
+            normalized_coarse_score=normalized_by_id[candidate.id],
+        )
+        for candidate in candidates
+    ]
+
+
 def cluster_temporal_regions(
     candidates: Sequence[SparseCandidate],
     parameters: ClusteringHyperparameters | None = None,
 ) -> list[TemporalRegion]:
-    """Cluster candidates per event/video, expand margins, then merge overlaps."""
+    """Cluster candidates per event/video, expand margins, then merge overlaps.
+
+    Still the production source for `bundle.artifacts.regions` (`service.py`)
+    - see `atomic_regions` above for why tuple ranking substitutes atomic
+    regions for its own pool without this function being safe to drop
+    globally."""
 
     parameters = parameters or ClusteringHyperparameters()
     if not candidates:

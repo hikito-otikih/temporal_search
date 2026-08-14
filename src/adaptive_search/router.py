@@ -54,11 +54,11 @@ from .exceptions import (
     SessionNotFoundError,
     UpstreamSearchError,
 )
-from .algorithms import prioritize_videos, robust_sigmoid
+from .algorithms import atomic_regions, prioritize_videos, robust_sigmoid
 from .boundary_refinement import refine_event_boundary
 from .boundary_seeds import select_event_seeds
 from .providers import VideoAssetNotFoundError
-from .tuple_ranking import atomic_regions, build_order_constraints, rank_videos_by_region_tuples
+from .tuple_ranking import build_order_constraints, rank_videos_by_region_tuples
 from .schemas import (
     BoundaryType,
     EventDefinition,
@@ -574,14 +574,20 @@ def get_video_priorities(
             # Atomic (unclustered) regions, not bundle.artifacts.regions - the
             # n=60 comparison in region_tuple_ranking_results.md found atomic
             # regions + temporal_relation + confidence_gate="threshold"@0.5
-            # the best final_query_score across all rounds, with a per-video
-            # regression profile (44/60 identical, 15/60 a tie-break-level
-            # rank shift with hits held constant, 1/60 better) judged
-            # acceptable relative to the aggregate gain. Stage 3 clustering
-            # (cluster_temporal_regions) still runs and still feeds the
-            # independent-argmax baseline above and boundary-refinement seed
-            # selection below - both untouched by this change, and the
-            # baseline is separately proven invariant to region granularity.
+            # the best final_query_score across all rounds. Clustering itself
+            # was verified (not just assumed) to have zero effect on the
+            # independent-argmax baseline and on select_event_seeds (every
+            # (event, video) pair's top seed was byte-identical between
+            # clustered and atomic input, n=60) - but it is NOT safe to drop
+            # from bundle.artifacts.regions globally: replace_frame_scores
+            # requires a submitted frame score's timestamp to fall within its
+            # region's [start_seconds, end_seconds] span, which a
+            # single-instant atomic region (start == end) cannot satisfy for
+            # any timestamp but its own - confirmed by two real test
+            # failures when this was tried. Clustering stays for
+            # bundle.artifacts.regions; only the tuple-ranking pool, which
+            # never validates frame scores against a region span, uses atomic
+            # regions instead.
             tuple_ranking, tuples_by_video = rank_videos_by_region_tuples(
                 atomic_regions(bundle.artifacts.candidates),
                 candidates_by_id,

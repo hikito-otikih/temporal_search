@@ -29,40 +29,7 @@ from dataclasses import dataclass
 from statistics import fmean
 from typing import Mapping, Sequence
 
-from .algorithms import _candidate_normalized_scores_by_event
 from .schemas import EventDefinition, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
-
-
-def atomic_regions(candidates: Sequence[SparseCandidate]) -> list[TemporalRegion]:
-    """One `TemporalRegion` per candidate - no clustering (Stage 3) at all.
-
-    Uses the exact same population-relative `robust_sigmoid` normalization
-    `cluster_temporal_regions` applies, via the same shared helper, so a
-    region's `normalized_coarse_score` here is directly comparable to (not
-    recalibrated relative to) a clustered region's. Production default for
-    the tuple-ranking path as of the n=60 comparison in
-    `region_tuple_ranking_results.md`: atomic regions + `temporal_relation` +
-    `confidence_gate="threshold"@0.5` was the best `final_query_score` found
-    across all rounds, with a per-video regression profile (44/60 identical,
-    15/60 off by a tie-break-level rank shift with hits held exactly
-    constant, 1/60 better) judged acceptable relative to the aggregate gain.
-    """
-
-    normalized_by_id = _candidate_normalized_scores_by_event(candidates)
-    return [
-        TemporalRegion(
-            id=f"atomic_{candidate.id}",
-            session_id=candidate.session_id,
-            event_id=candidate.event_id,
-            video_id=candidate.video_id,
-            start_seconds=candidate.timestamp_seconds,
-            end_seconds=candidate.timestamp_seconds,
-            candidate_ids=(candidate.id,),
-            raw_coarse_score=candidate.raw_relevance_score,
-            normalized_coarse_score=normalized_by_id[candidate.id],
-        )
-        for candidate in candidates
-    ]
 
 
 @dataclass(frozen=True)
