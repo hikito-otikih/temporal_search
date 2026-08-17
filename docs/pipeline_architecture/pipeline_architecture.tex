@@ -93,7 +93,8 @@ Stage & Primary module \\
 \midrule
 1. Query rewriting & \file{src/rewrite/service.py} \\
 2. Retrieval + RRF fusion & \file{src/adaptive\_search/retrieval.py} \\
-3. Temporal clustering & \file{src/adaptive\_search/algorithms.py::cluster\_temporal\_regions} \\
+3. Temporal region formation & \file{src/adaptive\_search/algorithms.py::atomic\_regions}
+   (superseded \code{cluster\_temporal\_regions}, Section~\ref{sec:stage3}) \\
 4. Video prioritization & \file{src/adaptive\_search/algorithms.py::prioritize\_videos} \\
 5. Boundary refinement (opt-in) & \file{src/adaptive\_search/boundary\_seeds.py},
    \file{boundary\_refinement.py} \\
@@ -257,6 +258,24 @@ recording provenance.
 \section{Stage 3: Temporal Region Clustering}
 % =====================================================================
 \label{sec:stage3}
+
+\corr{Production update (Section~\ref{sec:tuple-round7}):} this section
+describes \code{cluster\_temporal\_regions} and
+\code{merge\_overlapping\_regions}, which are no longer called from the
+production retrieve path as of Round 7 of the tuple-ranking methodology
+(Section~\ref{sec:tuple-ranking}) --- clustering and merging were found to
+have zero effect on either downstream consumer that used to justify them
+(Stage 4's ranking, Stage 5's refinement seeding), and were replaced by
+\code{algorithms.py::atomic\_regions}: one region per candidate, never
+merged, padded by a fixed \code{margin\_seconds} on each side (reusing this
+section's own \code{margin\_seconds} default, 3.0s) purely so a region still
+has real width for \code{replace\_frame\_scores}' span check. What follows
+describes the clustering \emph{algorithm}, still real, tested code
+(\file{algorithms.py}), still the comparison arm the production decision
+rests on --- just not what a live session runs today. Applied to this
+section's own worked example below, the current behavior would be: 353
+candidates $\to$ 353 regions (one each, not 309), every region padded to
+\code{[t-3, t+3]}, no merging step at all.
 
 \subsection{Clustering}
 \file{algorithms.py::cluster\_temporal\_regions} groups the fused candidates
@@ -850,6 +869,39 @@ the pool via \code{tuple\_ranking.atomic\_regions(bundle.artifacts.candidates)} 
 \code{bundle.artifacts.regions}. Stage 3 clustering still runs and still feeds the independent-argmax
 baseline and boundary-refinement seeding, both untouched and outside this ablation's scope.
 
+\subsubsection{Round 7: clustering removed from the production retrieve path entirely}
+\label{sec:tuple-round7}
+Round 6 left Stage 3 clustering running for two remaining consumers: the independent-argmax baseline
+and boundary-refinement seed selection. A further real check (not a benchmark re-run, a proof) found
+clustering has \emph{zero} effect on either: \code{select\_event\_seeds}' exact returned timestamp
+(refinement's sole input) was compared clustered-fed vs.\ atomic-fed for all 239 (event, video) pairs
+in the $n=60$ corpus, and every top seed was byte-identical, gap $=0.0$, no exceptions --- not a
+sample suggesting invariance, a proof of it, since both functions read only a region's member
+candidates' own scores and timestamps, never merged-region span.
+
+On that basis, clustering (\code{cluster\_temporal\_regions}) was removed from
+\code{service.py::retrieve\_candidates} entirely and replaced with unmerged, one-region-per-candidate
+construction (\code{atomic\_regions}, Section~\ref{sec:stage3}) for \emph{every} consumer, not just
+tuple ranking. This first attempt broke two real tests: \code{replace\_frame\_scores} requires a
+submitted frame score's timestamp to fall within its region's $[\text{start\_seconds},
+\text{end\_seconds}]$ span, and a single-instant region ($\text{start}=\text{end}$) cannot satisfy
+that for any timestamp but its own candidate's.
+
+The fix separates two axes Round 6 had conflated: \emph{merging} candidates together and giving a
+region \emph{width}. \code{atomic\_regions} gained an optional \code{margin\_seconds} pad (reusing
+\code{ClusteringHyperparameters.margin\_seconds}'s existing default, 3.0s, rather than introducing a
+new parameter) --- each candidate still gets its own unmerged region, now padded
+$[\,t-\code{margin\_seconds},\,t+\code{margin\_seconds}\,]$. This is verified, not assumed, to be
+free: the only place in \code{tuple\_ranking.py} that reads a region's span at all is a fallback for
+zero-member regions, which a real atomic region never is, so padding cannot change ranking or
+refinement output --- only which frame-score timestamps a region will accept. All 181 tests pass
+(including both that failed on the first attempt), and a live end-to-end
+\code{POST~.../artifacts/frame-scores} call against the restarted backend, with samples spread
+$\pm2$s around a real padded region, succeeded (previously the exact failure mode). Stage 3 clustering
+(\code{cluster\_temporal\_regions}, \code{merge\_overlapping\_regions}) is no longer called from any
+production path --- kept in \file{algorithms.py} only as the comparison arm this and Round 6's
+conclusions rest on.
+
 \subsection{Results}
 \label{sec:tuple-results}
 
@@ -1165,13 +1217,16 @@ than replacing it: \code{build\_order\_constraints} is called from
 \code{router.py} directly on \code{bundle.session.events}, so a live session
 now supplies real, transitively-closed order constraints whenever the
 rewrite stage classified \code{temporal\_relation} for it, with no benchmark
-workaround required. As of Round 6 (Section~\ref{sec:tuple-round6}), the
-region pool itself is also atomic rather than clustered: \code{atomic\_regions}
-moved out of the benchmark driver into \file{tuple\_ranking.py} so both share
-one implementation, and \code{get\_video\_priorities} calls it on
-\code{bundle.artifacts.candidates} in place of \code{bundle.artifacts.regions}
-for this path specifically --- Stage 3 clustering is otherwise unchanged and
-still feeds the independent-argmax baseline and refinement seeding.
+workaround required. As of Round 7 (Section~\ref{sec:tuple-round7}),
+\code{bundle.artifacts.regions} itself is atomic (padded, unmerged) for
+\emph{every} consumer, not just this path --- \code{atomic\_regions} lives in
+\file{algorithms.py} now, next to \code{cluster\_temporal\_regions}, which it
+replaced in \code{service.py::retrieve\_candidates}. This path's own call
+site (\code{router.py}) accordingly simplified back to passing
+\code{bundle.artifacts.regions} directly, with no special-casing --- the
+special case Round 6 introduced (atomic regions for tuple ranking only,
+clustered regions everywhere else) was a real intermediate state, not the
+final one.
 
 \begin{itemize}[nosep]
   \item \textbf{Ranking.} \code{TupleRankingHyperparameters}

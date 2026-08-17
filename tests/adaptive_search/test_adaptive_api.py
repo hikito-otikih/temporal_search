@@ -46,9 +46,6 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertIn("raw video", adaptive["frame_provider"]["reason"])
 
     def test_video_priorities_ranks_by_coverage_and_score(self):
-        from adaptive_search.algorithms import prioritize_videos
-        from adaptive_search.schemas import TemporalRegion
-
         session_id = self.create_session()
         candidates = [
             {
@@ -102,27 +99,6 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertGreater(items[0]["priority_score"], items[1]["priority_score"])
         self.assertEqual(items[0]["event_coverage"], 2)
         self.assertEqual(items[1]["event_coverage"], 1)
-
-        regions = self.client.get(f"/v1/search-sessions/{session_id}/regions").json()["items"]
-        session = self.client.get(f"/v1/search-sessions/{session_id}").json()["session"]
-
-        def to_region(item):
-            item = {k: v for k, v in item.items() if k != "selected_for_refinement"}
-            item["candidate_ids"] = tuple(item["candidate_ids"])
-            return TemporalRegion.model_validate(item)
-
-        expected = prioritize_videos(
-            [to_region(item) for item in regions],
-            [event["event_id"] for event in session["events"]],
-        )
-        self.assertEqual(
-            [item.video_id for item in expected],
-            [item["video_id"] for item in items],
-        )
-        self.assertEqual(
-            [item.priority_score for item in expected],
-            [item["priority_score"] for item in items],
-        )
 
     def test_session_candidate_score_and_tuple_pipeline(self):
         session_id = self.create_session()

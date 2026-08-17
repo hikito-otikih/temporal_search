@@ -166,6 +166,16 @@ class RefinementHyperparameters(StrictModel):
     video_coverage_weight: NonNegativeFloat = 0.0
     video_mean_weight: NonNegativeFloat = 1.0
     video_min_weight: NonNegativeFloat = 0.0
+    # Distinctness: penalizes a video whose covered events' chosen timestamps
+    # collapse onto (or near) the same physical moment - a real, observed
+    # failure mode of pure mean-of-independent-maxes ranking (one frame
+    # superficially matching several events' text queries, not a genuine
+    # multi-event match). 0.0 (off) pending the n=60 sweep this was added
+    # for - see region_tuple_ranking_results.md. `distinctness_norm_seconds`
+    # reuses the pipeline's existing 3.0s margin/gap scale rather than
+    # introducing a new constant.
+    video_distinctness_weight: NonNegativeFloat = 0.0
+    distinctness_norm_seconds: PositiveFloat = 3.0
 
     @model_validator(mode="after")
     def validate_refinement_configuration(self) -> "RefinementHyperparameters":
@@ -186,6 +196,7 @@ class RefinementHyperparameters(StrictModel):
             self.video_coverage_weight
             + self.video_mean_weight
             + self.video_min_weight
+            + self.video_distinctness_weight
         )
         if video_weight <= 0.0:
             raise ValueError("at least one video-priority weight must be positive")
@@ -267,20 +278,19 @@ class RankingHyperparameters(StrictModel):
 
 
 class TupleRankingHyperparameters(StrictModel):
-    """Multi-region pooling + order-aware tuple video ranking - an opt-in
-    alternative to `prioritize_videos()`'s independent per-event max.
+    """Multi-region pooling + order-aware tuple video ranking - the sole
+    ranking algorithm behind `GET .../video-priorities`.
+    `prioritize_videos()` (independent per-event max) still exists and is
+    still tested, but nothing in this endpoint calls it any more.
 
-    Validated against real YouCook2 queries, n=30
+    Validated against real YouCook2 queries, n=60
     (irrelevant_things/benchmarks/youcook2/region_tuple_ranking_results.md):
-    +15% final_query_score over the production default (1.4667 -> 1.6867),
-    with the tail-recall regression an unconditional order bonus caused in
-    earlier rounds fixed by confidence-gating (only trust the order signal
-    when the underlying region scores are themselves strong) - verified by
-    reversing every one of the specific videos that regressed, not just in
-    aggregate. Defaults below are that report's winning configuration.
-    Still opt-in (`apply_tuple_ranking=false` by default on
-    `GET .../video-priorities`) pending validation at a larger sample size
-    than n=30.
+    +12.4% final_query_score over prioritize_videos() (1.2133 -> 1.3633),
+    concentrated on the queries prioritize_videos() gets wrong (hard-subset
+    MRR +78%). Defaults below are that report's winning, seven-round-
+    validated configuration. This has only been validated on one corpus
+    (YouCook2) - re-check before assuming these defaults transfer to a
+    materially different one.
     """
 
     absolute_threshold: UnitScore = 0.0
@@ -289,11 +299,17 @@ class TupleRankingHyperparameters(StrictModel):
     relative_delta: NonNegativeFloat = 0.15
     """delta: a region must score >= (event's best region score - delta)."""
 
-    max_regions_per_event: PositiveInt = 20
-    """N: cap on pooled regions per (event, video), best-score-first. Swept
-    up to N=200 with no further benefit found past N~5 on the benchmark
-    corpus - kept at the proposal's own suggested cap since it costs nothing
-    extra to allow.
+    max_regions_per_event: PositiveInt = 100_000
+    """N: cap on pooled regions per (event, video), best-score-first.
+    Effectively unbounded - a real, measured exhaustive search (no N cap,
+    no max_combinations_per_video cap) over the full n=60 corpus, every
+    candidate video per query, produced byte-identical ranks on 59/60
+    videos and identical aggregate metrics to N=20, at +3.2% wall-clock
+    cost (11.8s exhaustive vs. 11.5s capped, both dwarfed by ~170s of
+    upstream fetch for the same run). `relative_delta` is the real
+    relevance gate; N was already not truncating anything real on this
+    corpus. Not a guarantee for a longer or denser corpus - re-check first
+    if pool sizes grow.
     """
 
     order_weight: NonNegativeFloat = 0.8
@@ -322,12 +338,16 @@ class TupleRankingHyperparameters(StrictModel):
     region_tuple_ranking_results.md for the fine-grained sweep this default
     was chosen from."""
 
-    max_combinations_per_video: PositiveInt = 20_000
+    max_combinations_per_video: PositiveInt = 10_000_000
     """Hard cap on tuples explored per video during backtracking - a safety
     valve against the N^event_count combinatorial blowup pooling many
     regions across many events could otherwise cause. Search order is
     best-region-first per event, so this cap truncates from the
-    least-promising end first."""
+    least-promising end first. Raised alongside max_regions_per_event: on
+    the real n=60 corpus the worst single video's true (uncapped) combination
+    count was 19,008 and the worst full-query total (summed across every
+    candidate video) was 21,467 - this cap is a safety net for pathological
+    inputs, not a lever that was actually shaping results here."""
 
     max_tuples_per_video: PositiveInt = 20
     """How many top-scoring tuples per video to retain (only matters for
@@ -567,6 +587,7 @@ class VideoPriority(StrictModel):
     normalized_coverage: UnitScore
     mean_best_event_score: UnitScore
     min_best_event_score: UnitScore
+    distinctness: UnitScore
     priority_score: UnitScore
 
 

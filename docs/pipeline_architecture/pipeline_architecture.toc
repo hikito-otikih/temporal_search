@@ -9,39 +9,40 @@
 \contentsline {subsection}{\numberline {3.3}Worked example}{6}{subsection.3.3}%
 \contentsline {section}{\numberline {4}Stage 3: Temporal Region Clustering}{6}{section.4}%
 \contentsline {subsection}{\numberline {4.1}Clustering}{6}{subsection.4.1}%
-\contentsline {subsection}{\numberline {4.2}Region scoring}{6}{subsection.4.2}%
-\contentsline {subsection}{\numberline {4.3}Merging}{6}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.2}Region scoring}{7}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Merging}{7}{subsection.4.3}%
 \contentsline {subsection}{\numberline {4.4}Worked example}{7}{subsection.4.4}%
 \contentsline {section}{\numberline {5}Stage 4: Video Prioritization}{7}{section.5}%
 \contentsline {subsection}{\numberline {5.1}Per-event, per-video best score}{7}{subsection.5.1}%
-\contentsline {subsection}{\numberline {5.2}Combining across events}{7}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.2}Combining across events}{8}{subsection.5.2}%
 \contentsline {subsection}{\numberline {5.3}\textbf {\textcolor {red!60!black}{There is no cross-event ``candidate tuple'' at this stage}}}{8}{subsection.5.3}%
-\contentsline {subsection}{\numberline {5.4}Worked example}{8}{subsection.5.4}%
+\contentsline {subsection}{\numberline {5.4}Worked example}{9}{subsection.5.4}%
 \contentsline {section}{\numberline {6}Stage 5 (opt-in): Per-Event Boundary Refinement}{9}{section.6}%
 \contentsline {subsection}{\numberline {6.1}Seed selection}{9}{subsection.6.1}%
-\contentsline {subsection}{\numberline {6.2}Native-fps neighborhood search}{9}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Text--image scoring}{9}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}Boundary-profile-aware proposal scoring}{9}{subsection.6.4}%
+\contentsline {subsection}{\numberline {6.2}Native-fps neighborhood search}{10}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Text--image scoring}{10}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Boundary-profile-aware proposal scoring}{10}{subsection.6.4}%
 \contentsline {subsection}{\numberline {6.5}Independence and its consequence}{10}{subsection.6.5}%
-\contentsline {subsection}{\numberline {6.6}User-fix short-circuit}{10}{subsection.6.6}%
-\contentsline {subsection}{\numberline {6.7}Worked example}{10}{subsection.6.7}%
-\contentsline {section}{\numberline {7}Stage 6: Interactive Correction}{11}{section.7}%
+\contentsline {subsection}{\numberline {6.6}User-fix short-circuit}{11}{subsection.6.6}%
+\contentsline {subsection}{\numberline {6.7}Worked example}{11}{subsection.6.7}%
+\contentsline {section}{\numberline {7}Stage 6: Interactive Correction}{12}{section.7}%
 \contentsline {section}{\numberline {8}Methodology: Multi-Region Pooling and Order-Aware Tuple Ranking}{12}{section.8}%
 \contentsline {subsection}{\numberline {8.1}Motivation}{12}{subsection.8.1}%
-\contentsline {subsection}{\numberline {8.2}Design}{12}{subsection.8.2}%
-\contentsline {subsubsection}{\numberline {8.2.1}Multi-region pooling}{12}{subsubsection.8.2.1}%
-\contentsline {subsubsection}{\numberline {8.2.2}Tuple assembly and order scoring}{12}{subsubsection.8.2.2}%
-\contentsline {subsubsection}{\numberline {8.2.3}Confidence-gated order weight}{13}{subsubsection.8.2.3}%
+\contentsline {subsection}{\numberline {8.2}Design}{13}{subsection.8.2}%
+\contentsline {subsubsection}{\numberline {8.2.1}Multi-region pooling}{13}{subsubsection.8.2.1}%
+\contentsline {subsubsection}{\numberline {8.2.2}Tuple assembly and order scoring}{13}{subsubsection.8.2.2}%
+\contentsline {subsubsection}{\numberline {8.2.3}Confidence-gated order weight}{14}{subsubsection.8.2.3}%
 \contentsline {subsubsection}{\numberline {8.2.4}Correctness invariant}{14}{subsubsection.8.2.4}%
 \contentsline {subsection}{\numberline {8.3}Experimental Methodology}{14}{subsection.8.3}%
-\contentsline {subsubsection}{\numberline {8.3.1}Round 1: core proposal ablation}{14}{subsubsection.8.3.1}%
-\contentsline {subsubsection}{\numberline {8.3.2}Round 2: relation-aware constraints, confidence gating, deeper pooling}{14}{subsubsection.8.3.2}%
+\contentsline {subsubsection}{\numberline {8.3.1}Round 1: core proposal ablation}{15}{subsubsection.8.3.1}%
+\contentsline {subsubsection}{\numberline {8.3.2}Round 2: relation-aware constraints, confidence gating, deeper pooling}{15}{subsubsection.8.3.2}%
 \contentsline {subsubsection}{\numberline {8.3.3}Round 3: a correctness fix, re-validated}{15}{subsubsection.8.3.3}%
 \contentsline {subsubsection}{\numberline {8.3.4}Round 4: two limitations closed, $n$ doubled to 60, a no-clustering ablation}{15}{subsubsection.8.3.4}%
-\contentsline {subsubsection}{\numberline {8.3.5}Round 5: fine-grained $\tau $ sweep and the full atomic-region grid}{15}{subsubsection.8.3.5}%
-\contentsline {subsubsection}{\numberline {8.3.6}Round 6: the missing combo, and the production switch to atomic regions}{15}{subsubsection.8.3.6}%
-\contentsline {subsection}{\numberline {8.4}Results}{16}{subsection.8.4}%
-\contentsline {subsection}{\numberline {8.5}Production Integration}{20}{subsection.8.5}%
-\contentsline {subsection}{\numberline {8.6}Limitations}{20}{subsection.8.6}%
-\contentsline {section}{\numberline {9}Summary of Corrections}{21}{section.9}%
-\contentsline {section}{\numberline {10}Hyperparameter Reference}{22}{section.10}%
+\contentsline {subsubsection}{\numberline {8.3.5}Round 5: fine-grained $\tau $ sweep and the full atomic-region grid}{16}{subsubsection.8.3.5}%
+\contentsline {subsubsection}{\numberline {8.3.6}Round 6: the missing combo, and the production switch to atomic regions}{16}{subsubsection.8.3.6}%
+\contentsline {subsubsection}{\numberline {8.3.7}Round 7: clustering removed from the production retrieve path entirely}{16}{subsubsection.8.3.7}%
+\contentsline {subsection}{\numberline {8.4}Results}{17}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Production Integration}{21}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}Limitations}{22}{subsection.8.6}%
+\contentsline {section}{\numberline {9}Summary of Corrections}{22}{section.9}%
+\contentsline {section}{\numberline {10}Hyperparameter Reference}{23}{section.10}%

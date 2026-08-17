@@ -181,24 +181,33 @@ def _candidate_normalized_scores_by_event(
         normalized.update(_candidate_normalized_scores(group))
     return normalized
 
-def atomic_regions(candidates: Sequence[SparseCandidate]) -> list[TemporalRegion]:
-    """One `TemporalRegion` per candidate - no clustering at all.
+def atomic_regions(
+    candidates: Sequence[SparseCandidate], *, margin_seconds: float = 0.0
+) -> list[TemporalRegion]:
+    """One `TemporalRegion` per candidate - no merging of nearby candidates,
+    ever - zero-width by default (`start_seconds == end_seconds ==
+    candidate.timestamp_seconds`).
 
-    Used for the tuple-ranking region pool only (`router.py`), not for
-    `bundle.artifacts.regions` generally. Clustering (`cluster_temporal_regions`,
-    below) was verified, not assumed, to have zero effect on both
+    The production region-formation path (`service.py::retrieve_candidates`,
+    called with no margin - true zero-width). `cluster_temporal_regions`
+    (below) was verified, not assumed, to have zero effect on
     `prioritize_videos()` and `select_event_seeds()` (each reduces to "the
-    single best-scoring raw candidate," an identity clustering can regroup
-    but not change - every (event, video) pair's top seed was byte-identical
-    between clustered and atomic input across a real n=60 corpus, so real
-    boundary refinement is provably identical too) and a small net *positive*
-    for order-aware tuple ranking specifically (`region_tuple_ranking_results.md`).
-    It is deliberately *not* used for `bundle.artifacts.regions` itself:
-    `replace_frame_scores` requires a submitted frame score's timestamp to
-    fall within its region's `[start_seconds, end_seconds]` span, which a
-    single-instant atomic region (`start == end`) cannot satisfy for any
-    timestamp but its own candidate's - confirmed by real test failures when
-    this was tried. Clustering still runs for every other consumer.
+    single best-scoring raw candidate," an identity merging can regroup but
+    not change - every (event, video) pair's top seed was byte-identical
+    between clustered and atomic input across a real n=60 corpus) and a
+    small net *positive* for order-aware tuple ranking
+    (`region_tuple_ranking_results.md`) - `_region_timestamp`
+    (`tuple_ranking.py`) and `select_event_seeds` both read only a region's
+    member candidates' own `timestamp_seconds`, never
+    `start_seconds`/`end_seconds`, so region width was never doing anything
+    for either. `replace_frame_scores` is the one exception - it needs a
+    real acceptance window around a region's timestamp, but that window is
+    now computed at validation time by `service.py::_frame_score_
+    acceptance_window` (margin applied there, with a cross-event-overlap
+    guard) rather than baked into every region up front via this
+    function's `margin_seconds` parameter, which exists for callers that
+    genuinely want padded regions (e.g. direct benchmark use) but is not
+    how production constructs them.
     """
 
     normalized_by_id = _candidate_normalized_scores_by_event(candidates)
@@ -208,8 +217,8 @@ def atomic_regions(candidates: Sequence[SparseCandidate]) -> list[TemporalRegion
             session_id=candidate.session_id,
             event_id=candidate.event_id,
             video_id=candidate.video_id,
-            start_seconds=candidate.timestamp_seconds,
-            end_seconds=candidate.timestamp_seconds,
+            start_seconds=max(0.0, candidate.timestamp_seconds - margin_seconds),
+            end_seconds=candidate.timestamp_seconds + margin_seconds,
             candidate_ids=(candidate.id,),
             raw_coarse_score=candidate.raw_relevance_score,
             normalized_coarse_score=normalized_by_id[candidate.id],
@@ -224,10 +233,11 @@ def cluster_temporal_regions(
 ) -> list[TemporalRegion]:
     """Cluster candidates per event/video, expand margins, then merge overlaps.
 
-    Still the production source for `bundle.artifacts.regions` (`service.py`)
-    - see `atomic_regions` above for why tuple ranking substitutes atomic
-    regions for its own pool without this function being safe to drop
-    globally."""
+    No longer called from the production retrieve path - see `atomic_regions`
+    above (padded, unmerged, now the production source for
+    `bundle.artifacts.regions`) for the full reasoning. Kept for the n=60
+    benchmark comparison that reasoning rests on, and importable directly by
+    anything that wants merged regions specifically."""
 
     parameters = parameters or ClusteringHyperparameters()
     if not candidates:
@@ -711,13 +721,41 @@ def _region_score_map(regions: Sequence[TemporalRegion]) -> dict[str, float]:
     }
 
 
+def _min_pairwise_gap_seconds(timestamps: Sequence[float]) -> float | None:
+    """The smallest gap between any two of `timestamps`. Always occurs
+    between two *adjacent* values in sorted order (a non-adjacent pair can
+    never be closer than the adjacent pairs between them), so sorting once
+    and diffing neighbors is enough - no need to check every pair."""
+
+    if len(timestamps) < 2:
+        return None
+    ordered = sorted(timestamps)
+    return min(b - a for a, b in zip(ordered, ordered[1:]))
+
+
+def distinctness_from_timestamps(
+    covered_timestamps: Sequence[float], norm_seconds: float
+) -> float:
+    """1.0 if fewer than 2 covered timestamps (nothing to compare against -
+    not a penalty for coverage, that's a separate term); otherwise the
+    smallest pairwise gap among them, normalized to [0,1] against
+    `norm_seconds`. Shared by `prioritize_videos()` (below) and
+    `router.py`'s tuple-ranking response construction, so both branches'
+    `distinctness` field means the same thing computed the same way."""
+
+    min_gap = _min_pairwise_gap_seconds(covered_timestamps)
+    return 1.0 if min_gap is None else min(1.0, min_gap / norm_seconds)
+
+
 def prioritize_videos(
     regions: Sequence[TemporalRegion],
     event_ids: Sequence[str],
     parameters: RefinementHyperparameters | None = None,
     constraints: SearchConstraints | None = None,
 ) -> list[VideoPriority]:
-    """Rank videos by event coverage, mean evidence, and weakest event."""
+    """Rank videos by event coverage, mean evidence, weakest event, and
+    distinctness (whether covered events' chosen timestamps are actually
+    spread out, not collapsed onto the same physical moment)."""
 
     parameters = parameters or RefinementHyperparameters()
     constraints = constraints or SearchConstraints()
@@ -729,30 +767,47 @@ def prioritize_videos(
     if not active:
         return []
     scores = _region_score_map(active)
-    by_video: dict[str, dict[str, float]] = defaultdict(dict)
+    # (score, representative_timestamp) per (video, event) - the timestamp is
+    # the region's own span midpoint, which recovers the source candidate's
+    # exact timestamp for atomic (single-candidate, symmetrically padded)
+    # regions; ties keep the last-seen region, matching this function's
+    # pre-existing max()-based tie behavior (which never had to pick a
+    # specific region for a tie, only its score).
+    by_video: dict[str, dict[str, tuple[float, float]]] = defaultdict(dict)
     for region in active:
         if region.event_id not in ordered_event_ids:
             continue
-        current = by_video[region.video_id].get(region.event_id, 0.0)
-        by_video[region.video_id][region.event_id] = max(current, scores[region.id])
+        region_score = scores[region.id]
+        current_score, _ = by_video[region.video_id].get(region.event_id, (0.0, 0.0))
+        if region_score >= current_score:
+            timestamp = (region.start_seconds + region.end_seconds) / 2.0
+            by_video[region.video_id][region.event_id] = (region_score, timestamp)
 
     weight_sum = (
         parameters.video_coverage_weight
         + parameters.video_mean_weight
         + parameters.video_min_weight
+        + parameters.video_distinctness_weight
     )
     priorities: list[VideoPriority] = []
     for video_id in sorted(by_video):
         best_by_event = by_video[video_id]
-        score_vector = [best_by_event.get(event_id, 0.0) for event_id in ordered_event_ids]
+        score_vector = [
+            best_by_event.get(event_id, (0.0, 0.0))[0] for event_id in ordered_event_ids
+        ]
         coverage = sum(event_id in best_by_event for event_id in ordered_event_ids)
         normalized_coverage = coverage / len(ordered_event_ids)
         mean_score = fmean(score_vector)
         minimum_score = min(score_vector)
+        covered_timestamps = [timestamp for _, timestamp in best_by_event.values()]
+        distinctness = distinctness_from_timestamps(
+            covered_timestamps, parameters.distinctness_norm_seconds
+        )
         priority_score = (
             parameters.video_coverage_weight * normalized_coverage
             + parameters.video_mean_weight * mean_score
             + parameters.video_min_weight * minimum_score
+            + parameters.video_distinctness_weight * distinctness
         ) / weight_sum
         priorities.append(
             VideoPriority(
@@ -761,6 +816,7 @@ def prioritize_videos(
                 normalized_coverage=normalized_coverage,
                 mean_best_event_score=mean_score,
                 min_best_event_score=minimum_score,
+                distinctness=distinctness,
                 priority_score=priority_score,
             )
         )

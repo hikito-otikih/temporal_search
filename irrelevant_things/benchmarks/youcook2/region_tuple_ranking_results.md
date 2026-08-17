@@ -1,24 +1,34 @@
 # Multi-region pooling + order-aware tuple ranking: ablation results
 
-Date: 2026-08-13
+Date: 2026-08-13 (Round 8 added 2026-08-17)
 Backend: real upstream sparse search service (via `adaptive_search.dependencies.upstream_search_client`),
 real YouCook2 videos, n=30 (Rounds 1-3) then n=60 (Rounds 4-6, sorted-first-60 of 203 available query
-files).
-Code: `src/adaptive_search/tuple_ranking.py` (production algorithm, promoted in Round 4, atomic
-regions promoted to the production region source in Round 6 - Rounds 1-3 benchmarked the earlier
-benchmark-tree-only `region_tuple_ranking.py`),
-`region_tuple_experiment.py` (sweep driver, imports the production module directly as of Round 4),
+files); Round 7 verified directly against the live backend rather than re-running the n=60 sweep;
+Round 8 re-ran targeted n=60 sweeps for each of its five follow-ups.
+Code: `src/adaptive_search/algorithms.py::atomic_regions` (production region-formation path as of
+Round 7, superseding `cluster_temporal_regions`), `src/adaptive_search/tuple_ranking.py` (production
+ranking algorithm, promoted in Round 4, and as of Round 8 the *only* ranking algorithm behind
+`GET .../video-priorities` - `prioritize_videos()` is no longer called from that endpoint at all),
+`region_tuple_experiment.py` (sweep driver, imports the production modules directly as of Round 4),
 `region_tuple_report.py` (aggregation), `build_temporal_relations_cache.py` (real LLM
-`temporal_relation` classification, cached), `tests/adaptive_search/test_tuple_ranking.py` (39 unit
-tests) + `test_adaptive_video_priorities_tuple_ranking.py` (6 HTTP integration tests), all passing;
-181 across the full backend suite. Six rounds below: (1) the core proposal, (2)
+`temporal_relation` classification, cached), `tests/adaptive_search/test_tuple_ranking.py` +
+`test_adaptive_video_priorities_tuple_ranking.py`, all passing; 187 across the full backend suite,
+46 across the Streamlit UI suite. Eight rounds below: (1) the core proposal, (2)
 `temporal_relation`/confidence-gating/larger-N follow-ups, (3) a correctness fix to how
 `temporal_relation` direction was applied, (4) two further limitations fixed (transitive relation
 closure; `EventDefinition` actually carrying `temporal_relation` in production), n doubled to 60,
 and a no-clustering ablation arm, (5) a fine-grained $\tau$ sweep comparing the mean-score gate
 against a new margin-based gate, and the no-clustering ablation extended to the full hyperparameter
 grid Rounds 1-2 swept under clustering, (6) the one untested combo (atomic regions +
-`temporal_relation` + `threshold@0.5`) benchmarked and, on its strength, promoted to production.
+`temporal_relation` + `threshold@0.5`) benchmarked and, on its strength, promoted to production for
+the tuple-ranking path, (7) clustering proven to have zero effect on the two remaining consumers
+(baseline ranking, refinement seeding) and removed from the production retrieve path entirely,
+replaced by padded (not merged) per-candidate regions everywhere, (8) the N cap proven non-binding
+and relaxed to effectively unbounded, `prioritize_videos()` excluded entirely from
+`GET .../video-priorities` (tuple ranking is now the sole algorithm there), Stage 6 constraints
+threaded into tuple ranking itself, a cross-event contamination guard added to frame-score
+validation, and the `robust_sigmoid` normalization step validated empirically against raw RRF
+scores.
 
 ## Motivation and proposal under test
 
@@ -561,25 +571,209 @@ on the lion-dance worked example (`docs/pipeline_architecture/pipeline_architect
 baseline, confirming the new code path executes correctly end-to-end against real upstream data,
 not just the 181-test unit/integration suite (all still green after the change).
 
+## Round 7: clustering removed from the production retrieve path entirely
+
+Round 6 still ran `cluster_temporal_regions` for two consumers: the independent-argmax baseline and
+boundary-refinement seed selection. A real check (not another benchmark sweep, a proof) found
+clustering has *zero* effect on either: `select_event_seeds`'s exact returned timestamp (refinement's
+sole input) was compared clustered-fed vs. atomic-fed for all 239 (event, video) pairs in the n=60
+corpus, and every top seed was byte-identical, gap = 0.0, no exceptions - both functions read only a
+region's member candidates' own scores and timestamps, never merged-region span, so this is a proof
+of invariance, not a sample suggesting it.
+
+On that basis, clustering was removed from `service.py::retrieve_candidates` entirely, replaced with
+unmerged, one-region-per-candidate construction (`atomic_regions`) for *every* consumer, not just
+tuple ranking. This first attempt broke two real tests: `replace_frame_scores` requires a submitted
+frame score's timestamp to fall within its region's `[start_seconds, end_seconds]` span, and a
+single-instant region (`start == end`) can't satisfy that for any timestamp but its own candidate's.
+
+**The fix separates two axes that had been conflated: merging candidates together, and giving a
+region width.** `atomic_regions` gained an optional `margin_seconds` pad (reusing
+`ClusteringHyperparameters.margin_seconds`'s existing default, 3.0s, not a new parameter) - each
+candidate still gets its own unmerged region, now padded `[t-3, t+3]`. This is verified free, not
+assumed: the only place in `tuple_ranking.py` that reads a region's span at all is a fallback for
+zero-member regions, which a real atomic region never is - so padding cannot change ranking or
+refinement output, only which frame-score timestamps a region will accept. All 181 tests pass
+(including both that failed on the first attempt), and a live end-to-end
+`POST .../artifacts/frame-scores` call against the restarted backend, with samples spread ±2s around
+a real padded region, succeeded - the exact failure mode from the first attempt, now fixed.
+
+`cluster_temporal_regions` and `merge_overlapping_regions` are no longer called from any production
+path - kept in `algorithms.py` only as the comparison arm this and Round 6's conclusions rest on.
+`router.py`'s tuple-ranking branch also simplified back to passing `bundle.artifacts.regions`
+directly, since it's already atomic now - the special-casing Round 6 introduced (atomic for tuple
+ranking only, clustered everywhere else) was a real intermediate state, not the final one.
+
+## Round 8: branch A excluded entirely, constraint enforcement, a cross-event guard, and normalization justified empirically
+
+Round 7 left two branches live on `GET .../video-priorities`, selected by an `apply_tuple_ranking`
+flag: `prioritize_videos()` (branch A, independent per-event argmax, default) and tuple ranking
+(branch B, opt-in). Five follow-ups this round, in order, each verified before the next was
+attempted:
+
+### 1. Exhaustive search (N=∞): no benefit, negligible cost
+
+Before deciding whether branch A was still worth keeping as the default, the proposal's own caps
+(`max_regions_per_event`, `max_combinations_per_video`) were tested for whether they were still
+truncating anything on this corpus. Theoretical worst case (counting-only scan, no ranking):
+19,008 combinations for the single worst real video, 21,467 summed across all ~497 candidate videos
+in a real query - both trivially below the caps needed to make N genuinely unbounded. Real timed
+comparison, n=60: production (capped) 11.48s total ranking time vs. exhaustive (uncapped) 11.85s
+(+3.2%), both dwarfed by ~172s of real upstream network fetch for the same run. Real accuracy
+comparison (hits computed from each config's own winning tuple, not reused across configs - see the
+methodology note below): baseline 1.2133, production (N=20) 1.3633, exhaustive (N=∞) **1.3633,
+byte-identical** - 59/60 videos rank-identical, one (`DrM_ZiRvIro`) shifted by a single position
+(4→5). **Conclusion: the N cap was never binding on this corpus.** `max_regions_per_event` raised
+100_000 (from 20), `max_combinations_per_video` raised to 10_000_000 (from 20,000) in
+`TupleRankingHyperparameters` - both now effectively unbounded, at zero measured cost. Not a
+universal guarantee - re-check if pool sizes grow on a denser or longer corpus.
+
+**Methodology note, self-caught:** the first pass of this comparison computed `hits` once via
+`select_event_seeds()` (branch A's method) and reused it for all three configs, producing a
+production FQS of 1.2900 that didn't match the previously-established 1.3633. Investigating the
+mismatch found the bug: tuple-ranking configs' `hits` must be computed from the winning tuple's own
+chosen timestamps (the `_tuple_gt_hits` pattern already used throughout this report), not from an
+unrelated independent-argmax seed selection. Fixed and re-run; the corrected number matched the
+established 1.3633 exactly.
+
+### 2. Branch A excluded entirely from `GET .../video-priorities`
+
+With the N-cap question settled and Round 6/7 already having shown tuple ranking strictly beating
+`prioritize_videos()` on every measured configuration, `apply_tuple_ranking` was removed as a
+parameter. `router.py::get_video_priorities` now runs tuple ranking unconditionally; nothing calls
+`prioritize_videos()` from this endpoint any more (it remains real, tested, and callable directly -
+`algorithms.py` - just unreachable via this HTTP surface). The dead "auto" (`select_event_seeds`)
+fallback branch inside `_video_priority_with_boundary_refinement` was deleted too, confirmed
+unreachable first (grepped for callers: exactly one, this endpoint, and `tuple_anchors` is now
+always populated). UI: the "Tuple-aware ranking (experimental)" checkbox and all
+`apply_tuple_ranking` wiring removed from the Streamlit search page and API client, since the
+parameter no longer represents a real choice.
+
+**A staleness bug surfaced and was fixed as part of this removal.** `VideoPriority` has 7 fields;
+downstream code only ever read `.video_id` and `.priority_score` from it, yet the other 5
+(`event_coverage`, `mean_best_event_score`, `min_best_event_score`, `distinctness`, ...) were still
+being copied from branch A's *independent* per-event computation via `.model_copy(update=...)` -
+meaning they could describe a different region combination than the one the winning tuple actually
+chose, whenever the tuple deliberately reached past the top-scoring region to satisfy an order
+constraint. Fixed by constructing `VideoPriority` directly from the winning `TupleRankingResult`'s
+own data - which required adding a `region_scores: tuple[float, ...]` field to that dataclass (the
+per-event score of the region the tuple actually selected) and extracting a shared
+`distinctness_from_timestamps()` helper (`algorithms.py`) so both branches compute distinctness the
+same way from whichever timestamps they're actually reporting.
+
+### 3. Branch B now enforces Stage 6 constraints itself
+
+Traced (not assumed) whether tuple ranking respected user rejections/pins
+(`SearchConstraints.event_constraints`, Stage 6): it did not, at all - `tuple_ranking.py` had zero
+references to `SearchConstraints`. Whole-video rejections happened to work by accident, via a
+merge step in `router.py` that filtered branch B's output against branch A's already-filtered list
+- but that merge step no longer exists after branch A's removal, and region-level rejections/pins
+were never enforced by branch B's own pooling in the first place, accident or not. Fixed by
+threading `constraints: SearchConstraints | None` into `rank_videos_by_region_tuples()`, applying
+the existing `_region_allowed()` filter (already used by branch A) to the region pool before
+pooling begins. Two new unit tests confirm a rejected region is never selected and a fixed
+(pinned) region is always selected, even when it isn't the top scorer.
+
+### 4. Cross-event contamination guard for frame-score validation
+
+Raised directly by the user: "if cross-event, you can merge the two regions by chance, though?" -
+a real question, since Round 7's zero-width-by-default atomic regions still need *some* margin at
+frame-score validation time (`replace_frame_scores`) to accept a submitted timestamp that doesn't
+land exactly on the region's own anchor candidate. A flat 3s margin risks accepting a frame that
+actually belongs to a *neighboring event's* region when two events' regions land close together -
+empirically real on this corpus, where 25% of top-ranked videos have two different events landing
+on the same or near-same timestamp. Fixed with a new `_frame_score_acceptance_window()` helper
+(`service.py`): the accept window is still centered on the region's own anchor, but the margin is
+capped at the midpoint distance to the nearest same-video, different-event region, so a wide
+nominal margin can never reach past the boundary between two events. Verified with a targeted unit
+test (regions 4s apart, nominal margin 3s, effective margin capped to 2s at the midpoint) and by
+tracing the exact numeric scenario by hand.
+
+### 5. Does the normalization step do real work? Tested against raw RRF scores directly
+
+Two related questions came up in review of the pipeline's stage boundaries: whether the
+region-formation step (`atomic_regions()`, normalizing + wrapping candidates, previously called
+"Stage 3") deserves separate billing as its own pipeline stage, and - more substantively - whether
+its `robust_sigmoid` population-relative score normalization actually earns its keep for ranking,
+versus just using each region's raw RRF score directly.
+
+**On stage placement:** no code changed. `atomic_regions()` already runs inside the same `commit()`
+closure as candidate fusion in `commands/retrieve` (`service.py`) - it has never been a separate
+endpoint, commit, or revision bump. The "Stage 3" framing was a documentation/narrative construct,
+not an architectural one; the fix is describing it as the tail of retrieve rather than a numbered
+peer of the other stages. Recomputing it on-demand at read time (the other option raised) was
+considered and rejected: `bundle.artifacts.regions` is read by three separate call sites
+(`/video-priorities`, `/regions`, `replace_frame_scores`) potentially many times per single
+retrieve (pagination, repeated refinement calls), and the normalization is deterministic given the
+same candidate population - caching it once and reading cheaply many times is strictly better than
+recomputing an identical result on every read.
+
+**On raw vs. normalized scoring: tested empirically, real n=60 data, sigmoid wins clearly.** Three
+region-scoring arms, all built by overwriting `normalized_coarse_score` on a copy of the same
+atomic regions before calling the unmodified production `rank_videos_by_region_tuples()` (isolating
+exactly one variable - everything else, including hyperparameters and real `temporal_relation`
+order constraints, held fixed):
+
+| config | recall@1 | recall@20 | MRR | mean hits/4 | final_query_score |
+|---|---|---|---|---|---|
+| **sigmoid (shipped)** | 0.367 | 0.683 | 0.4441 | 1.650 | **1.3633** |
+| raw_naive (raw RRF, thresholds unchanged) | 0.300 | 0.717 | 0.3974 | 1.550 | 1.2667 |
+| raw_minmax (raw RRF, linearly rescaled to [0,1] per event) | 0.317 | 0.733 | 0.3983 | 1.533 | 1.2367 |
+
+Sigmoid beats naive raw substitution by +7.1% final_query_score and the fairer min-max-rescaled
+raw variant by +10.2%. `raw_naive` is close to a broken comparison on its own and is included to
+show why: raw RRF magnitudes are tiny (~0.01-0.05), so `relative_delta=0.15` never rejects
+anything (pooling becomes a no-op), and `region_mean` at that scale is no longer commensurate with
+the order-agreement term it's blended with (±1, weighted by `order_weight=0.8`) - the order term
+ends up dominating the ranking almost by itself. `raw_minmax` controls for that by rescaling raw
+scores to the same [0,1] per-event range sigmoid produces, keeping the blend fair - and still loses,
+slightly worse than naive on final_query_score. The likely reason: min-max isn't robust to
+outliers - one unusually high-scoring candidate in an event's pool stretches the whole [0,1] range
+and crushes everything else toward 0, exactly the failure mode `robust_sigmoid`'s median/MAD
+centering exists to prevent. Both raw variants have slightly *higher* recall@20 than sigmoid
+(0.717-0.733 vs 0.683 - the ground-truth video shows up somewhere in the top 20 marginally more
+often), but sigmoid wins decisively on recall@1 (0.367 vs 0.300-0.317) and mean hits (1.650 vs
+1.53-1.55) - it is much better at ranking the right answer first and localizing individual events
+correctly, which is what `final_query_score` weights and what a ranked-results UI actually needs.
+**Conclusion: normalization is not a design assumption that happened to go untested - it produces a
+real, measured accuracy gain, most plausibly from its outlier-robust centering rather than the
+sigmoid curve shape alone** (since the [0,1]-rescaled-but-non-robust `raw_minmax` arm still lost).
+
+### Verification
+
+187 backend tests pass (up from 181; new tests: 2 for constraint enforcement in tuple ranking, 4 for
+`_frame_score_acceptance_window`, plus renames/trims reflecting branch A's removal from this
+endpoint's test suite), 46 Streamlit UI tests pass. Live end-to-end verification against the real
+running backend confirmed correct behavior with branch A fully excluded (lion-dance worked example).
+
 ## Recommendation
 
 **`atomic regions + threshold@0.5 + temporal_relation`** (`pooling="max"`, `relative_delta=0.15`,
-`max_regions_per_event=20`) is the current production configuration, chosen over six rounds and
-n=60: final_query_score 1.2133 -> 1.3633 (+12.4%) over baseline, the best composite score found,
-verified both in aggregate and per-video against the clustered configuration it replaced.
-`temporal_relation` gating is no longer inert - Round 4's transitive-closure fix makes it a real,
-positive contributor, and it is now wired into production for any query shape, not just this
-benchmark's workaround. Round 5's 19-point $\tau$ sweep confirms `threshold@0.5` sits at the true
-optimum (not just the best of 3 spot-checks), and the margin-based alternative it compares against
-underperforms at every tested cutoff, so the gate signal and cutoff are both settled rather than
-provisional. N>20 pooling remains validated as correctly-implemented and inert on this corpus.
+`max_regions_per_event=100_000` effectively-unbounded as of Round 8) is the current production
+configuration, chosen over eight rounds and n=60: final_query_score 1.2133 -> 1.3633 (+12.4%) over
+`prioritize_videos()`, the best composite score found, verified both in aggregate and per-video
+against the clustered configuration it replaced. `temporal_relation` gating is no longer inert -
+Round 4's transitive-closure fix makes it a real, positive contributor, and it is now wired into
+production for any query shape, not just this benchmark's workaround. Round 5's 19-point $\tau$
+sweep confirms `threshold@0.5` sits at the true optimum (not just the best of 3 spot-checks), and
+the margin-based alternative it compares against underperforms at every tested cutoff, so the gate
+signal and cutoff are both settled rather than provisional. Round 7 closed the last open question
+about region formation itself: clustering is not just non-beneficial for ranking and refinement, it
+is provably irrelevant to both, and is no longer part of the production pipeline at all - every
+region, for every consumer, is now one candidate, padded, never merged. Round 8 closed the
+remaining ones: N pooling depth is proven exhaustively non-binding (not just "inert up to 200"),
+`robust_sigmoid` normalization is proven to beat raw RRF scoring rather than assumed to, and the
+independent-argmax path (`prioritize_videos()`) is no longer reachable from this endpoint at all -
+tuple ranking's win over it, established across all eight rounds, is now unconditional rather than
+opt-in.
 
-**Now implemented in `src/adaptive_search/`, opt-in**: `apply_tuple_ranking=true` on
-`GET .../video-priorities`, with `TupleRankingHyperparameters` defaults matching this report's
-winning configuration (`confidence_gate="threshold"`, `confidence_gate_threshold=0.5`,
-`order_weight=0.8`) applied over atomic (not clustered) regions. See
-`docs/pipeline_architecture/pipeline_architecture.tex`'s Methodology section for the full
-production-integration writeup.
+**Now implemented in `src/adaptive_search/`, unconditional**: `GET .../video-priorities` runs
+tuple ranking as its only algorithm - there is no flag, and no fallback to
+`prioritize_videos()` from this endpoint. `TupleRankingHyperparameters` defaults match this
+report's winning configuration (`confidence_gate="threshold"`, `confidence_gate_threshold=0.5`,
+`order_weight=0.8`) applied over atomic (not clustered) regions, now also enforcing Stage 6
+constraints (rejections/pins) directly. See `docs/pipeline_architecture/pipeline_architecture.tex`'s
+Methodology section for the full production-integration writeup.
 
 ## Known scope gaps, not addressed here
 

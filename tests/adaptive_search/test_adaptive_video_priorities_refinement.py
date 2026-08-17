@@ -201,7 +201,14 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
         self.assertEqual(embedder.encode_text_calls, 0)
         self.assertEqual(embedder.encode_image_calls, 0)
 
-    def test_auto_refined_events_are_labeled_source_auto(self):
+    def test_refined_events_are_labeled_source_tuple_ranking(self):
+        # Order-aware tuple ranking is the only ranking algorithm this
+        # endpoint runs (Round 8) - every refined event is seeded from a
+        # winning tuple's own timestamp, so "source" is always
+        # "tuple_ranking" (or "user_fixed" when a Stage 6 correction
+        # overrides it - see test_user_fixed_frame_is_authoritative_and_
+        # skips_refinement above). There is no more independent/"auto"
+        # selection path to label.
         boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
         boundary_refinement_runtime.embedder = FakeEmbedder()
         session_id = self._create_session_with_one_candidate()
@@ -211,7 +218,7 @@ class VideoPrioritiesBoundaryRefinementTests(unittest.TestCase):
             params={"apply_boundary_refinement": "true"},
         )
         events = response.json()["items"][0]["boundary_refinement"]["events"]
-        self.assertEqual(events[0]["source"], "auto")
+        self.assertEqual(events[0]["source"], "tuple_ranking")
 
     def test_per_video_metadata_miss_is_skipped_without_failing_the_request(self):
         # video_full has no known metadata in this fake catalog -> that one

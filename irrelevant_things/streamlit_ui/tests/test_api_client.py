@@ -246,34 +246,9 @@ class ApiClientTests(unittest.TestCase):
         data = client.get_video_priorities("s1", limit=20, apply_boundary_refinement=True)
         self.assertTrue(captured["url"].endswith(
             "/v1/search-sessions/s1/video-priorities"
-            "?offset=0&limit=20&apply_boundary_refinement=true&apply_tuple_ranking=false"
+            "?offset=0&limit=20&apply_boundary_refinement=true"
         ))
         self.assertEqual(data["boundary_refinement_capability"]["available"], False)
-
-    def test_get_video_priorities_apply_tuple_ranking_request_param(self):
-        captured = {}
-
-        def handler(request):
-            captured["url"] = str(request.url)
-            return json_response(
-                {
-                    "items": [],
-                    "total": 0,
-                    "offset": 0,
-                    "limit": 20,
-                    "boundary_refinement_capability": {"requested": False, "available": False},
-                    "tuple_ranking": {"requested": True},
-                }
-            )
-
-        client = make_client(handler)
-        client.get_video_priorities(
-            "s1", limit=20, apply_boundary_refinement=False, apply_tuple_ranking=True
-        )
-        self.assertTrue(captured["url"].endswith(
-            "/v1/search-sessions/s1/video-priorities"
-            "?offset=0&limit=20&apply_boundary_refinement=false&apply_tuple_ranking=true"
-        ))
 
 
 if __name__ == "__main__":

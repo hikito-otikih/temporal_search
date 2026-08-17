@@ -54,9 +54,8 @@ from .exceptions import (
     SessionNotFoundError,
     UpstreamSearchError,
 )
-from .algorithms import atomic_regions, prioritize_videos, robust_sigmoid
+from .algorithms import distinctness_from_timestamps, robust_sigmoid
 from .boundary_refinement import refine_event_boundary
-from .boundary_seeds import select_event_seeds
 from .providers import VideoAssetNotFoundError
 from .tuple_ranking import build_order_constraints, rank_videos_by_region_tuples
 from .schemas import (
@@ -66,6 +65,7 @@ from .schemas import (
     SearchHyperparameters,
     SearchConstraints,
     SparseCandidate,
+    VideoPriority,
 )
 from .rewrite_bridge import rewrite_queries_and_build_plan
 from .session import SearchSession, SessionBundle
@@ -555,69 +555,65 @@ def get_video_priorities(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
     apply_boundary_refinement: bool = Query(default=False),
-    apply_tuple_ranking: bool = Query(default=False),
 ):
     try:
         bundle = adaptive_service.get_session(session_id)
         event_ids = [event.event_id for event in bundle.session.events]
-        priorities = prioritize_videos(
-            bundle.artifacts.regions,
-            event_ids,
-            bundle.session.hyperparameters.refinement,
-            bundle.session.constraints,
-        )
         candidates_by_id = {c.id: c for c in bundle.artifacts.candidates}
 
+        # Order-aware tuple ranking is the only ranking algorithm this
+        # endpoint runs - prioritize_videos() (independent per-event argmax)
+        # is no longer called here at all. It remains real, tested code -
+        # the always-available reference baseline every benchmark in
+        # region_tuple_ranking_results.md compares against - just not
+        # reachable through this endpoint anymore; there is no evidence it
+        # ever produces a better result, and threading its own SearchConstraints
+        # filtering + VideoPriority construction through two independent
+        # code paths was exactly the kind of duplication that let five of
+        # seven VideoPriority fields silently go stale (fixed the round
+        # before this one).
+        order_constraints = build_order_constraints(bundle.session.events)
+        tuple_ranking, tuples_by_video = rank_videos_by_region_tuples(
+            bundle.artifacts.regions,
+            candidates_by_id,
+            event_ids,
+            bundle.session.hyperparameters.tuple_ranking,
+            order_constraints,
+            bundle.session.constraints,
+        )
+        # Raw tuple scores aren't bounded to [0,1] (mean region score can be
+        # pushed above 1 or below 0 by the order term) - normalize the same
+        # way assemble_ordered_tuples() already does for its own raw scores
+        # before writing into priority_score's UnitScore field.
+        normalized_by_video = dict(zip(
+            (video_id for video_id, _ in tuple_ranking),
+            robust_sigmoid([score for _, score in tuple_ranking]),
+        ))
+        distinctness_norm = bundle.session.hyperparameters.refinement.distinctness_norm_seconds
+        priorities = []
         tuple_anchors_by_video: dict[str, dict[str, float]] = {}
-        if apply_tuple_ranking:
-            order_constraints = build_order_constraints(bundle.session.events)
-            # Atomic (unclustered) regions, not bundle.artifacts.regions - the
-            # n=60 comparison in region_tuple_ranking_results.md found atomic
-            # regions + temporal_relation + confidence_gate="threshold"@0.5
-            # the best final_query_score across all rounds. Clustering itself
-            # was verified (not just assumed) to have zero effect on the
-            # independent-argmax baseline and on select_event_seeds (every
-            # (event, video) pair's top seed was byte-identical between
-            # clustered and atomic input, n=60) - but it is NOT safe to drop
-            # from bundle.artifacts.regions globally: replace_frame_scores
-            # requires a submitted frame score's timestamp to fall within its
-            # region's [start_seconds, end_seconds] span, which a
-            # single-instant atomic region (start == end) cannot satisfy for
-            # any timestamp but its own - confirmed by two real test
-            # failures when this was tried. Clustering stays for
-            # bundle.artifacts.regions; only the tuple-ranking pool, which
-            # never validates frame scores against a region span, uses atomic
-            # regions instead.
-            tuple_ranking, tuples_by_video = rank_videos_by_region_tuples(
-                atomic_regions(bundle.artifacts.candidates),
-                candidates_by_id,
-                event_ids,
-                bundle.session.hyperparameters.tuple_ranking,
-                order_constraints,
+        for video_id, priority_score in sorted(
+            normalized_by_video.items(), key=lambda item: (-item[1], item[0])
+        ):
+            winner = tuples_by_video[video_id][0]
+            coverage = sum(1 for region_id in winner.region_ids if region_id is not None)
+            covered_timestamps = [t for t in winner.timestamps if t is not None]
+            priorities.append(
+                VideoPriority(
+                    video_id=video_id,
+                    event_coverage=coverage,
+                    normalized_coverage=coverage / len(event_ids),
+                    mean_best_event_score=winner.region_mean_score,
+                    min_best_event_score=min(winner.region_scores),
+                    distinctness=distinctness_from_timestamps(covered_timestamps, distinctness_norm),
+                    priority_score=priority_score,
+                )
             )
-            # Raw tuple scores aren't bounded to [0,1] (mean region score can
-            # be pushed above 1 or below 0 by the order term) - normalize the
-            # same way assemble_ordered_tuples() already does for its own raw
-            # scores before writing into priority_score's UnitScore field.
-            normalized_by_video = dict(zip(
-                (video_id for video_id, _ in tuple_ranking),
-                robust_sigmoid([score for _, score in tuple_ranking]),
-            ))
-            priorities = sorted(
-                (
-                    priority.model_copy(update={"priority_score": normalized_by_video[priority.video_id]})
-                    for priority in priorities
-                    if priority.video_id in normalized_by_video
-                ),
-                key=lambda priority: (-priority.priority_score, priority.video_id),
-            )
-            for video_id, tuples in tuples_by_video.items():
-                winner = tuples[0]
-                tuple_anchors_by_video[video_id] = {
-                    event_id: timestamp
-                    for event_id, timestamp in zip(event_ids, winner.timestamps)
-                    if timestamp is not None
-                }
+            tuple_anchors_by_video[video_id] = {
+                event_id: timestamp
+                for event_id, timestamp in zip(event_ids, winner.timestamps)
+                if timestamp is not None
+            }
         page = priorities[offset : offset + limit]
 
         capability_available = False
@@ -631,11 +627,10 @@ def get_video_priorities(
             _video_priority_with_boundary_refinement(
                 priority,
                 bundle=bundle,
-                candidates_by_id=candidates_by_id,
                 requested=apply_boundary_refinement,
                 capability_available=capability_available,
                 capability_reason=capability_reason,
-                tuple_anchors=tuple_anchors_by_video.get(priority.video_id),
+                tuple_anchors=tuple_anchors_by_video[priority.video_id],
             )
             for priority in page
         ]
@@ -649,7 +644,6 @@ def get_video_priorities(
                 "available": capability_available,
                 "reason": capability_reason,
             },
-            "tuple_ranking": {"requested": apply_tuple_ranking},
         }
     except Exception as exc:
         _raise_api_error(exc)
@@ -736,11 +730,10 @@ def _video_priority_with_boundary_refinement(
     priority,
     *,
     bundle,
-    candidates_by_id: dict[str, SparseCandidate],
     requested: bool,
     capability_available: bool,
     capability_reason: str | None,
-    tuple_anchors: dict[str, float] | None = None,
+    tuple_anchors: dict[str, float],
 ) -> dict[str, Any]:
     payload = priority.model_dump(mode="json")
     if not requested:
@@ -783,30 +776,15 @@ def _video_priority_with_boundary_refinement(
             )
             continue
 
-        # A winning region-tuple (apply_tuple_ranking=true) already chose one
-        # region per event jointly, order-aware - use its timestamp directly
-        # instead of re-deriving an independent per-event argmax, which is
-        # exactly the mechanism the tuple ranking was built to avoid (see
-        # tuple_ranking.py's module docstring). An event absent from
-        # tuple_anchors (not covered by the winning tuple) falls through to
-        # the same "nothing to refine" outcome independent selection would
-        # also reach, since both read from the same regions.
-        if tuple_anchors is not None:
-            anchor_seconds = tuple_anchors.get(event.event_id)
-            if anchor_seconds is None:
-                continue
-            anchor_source = "tuple_ranking"
-        else:
-            seeds = select_event_seeds(
-                regions=bundle.artifacts.regions,
-                candidates_by_id=candidates_by_id,
-                event_id=event.event_id,
-                video_id=priority.video_id,
-            )
-            if not seeds:
-                continue
-            anchor_seconds = seeds[0]
-            anchor_source = "auto"
+        # The winning region-tuple already chose one region per event
+        # jointly, order-aware - use its timestamp directly rather than
+        # re-deriving an independent per-event argmax, which is exactly the
+        # mechanism tuple ranking exists to avoid (see tuple_ranking.py's
+        # module docstring). An event absent from tuple_anchors (not
+        # covered by the winning tuple) has nothing to refine.
+        anchor_seconds = tuple_anchors.get(event.event_id)
+        if anchor_seconds is None:
+            continue
         try:
             outcome = refine_event_boundary(
                 provider=boundary_refinement_runtime.frame_provider,
@@ -835,7 +813,7 @@ def _video_priority_with_boundary_refinement(
                 "used_fallback": outcome.used_fallback,
                 "boundary_type": event.boundary_type,
                 "sampled_frame_count": outcome.sampled_frame_count,
-                "source": anchor_source,
+                "source": "tuple_ranking",
             }
         )
     payload["boundary_refinement"] = {

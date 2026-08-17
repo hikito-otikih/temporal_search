@@ -29,7 +29,8 @@ from dataclasses import dataclass
 from statistics import fmean
 from typing import Mapping, Sequence
 
-from .schemas import EventDefinition, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
+from .algorithms import _region_allowed
+from .schemas import EventDefinition, SearchConstraints, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,12 @@ class TupleRankingResult:
     order_score: float
     region_ids: tuple[str | None, ...]
     timestamps: tuple[float | None, ...]
+    # Per-event score of the region this tuple actually chose, zero-filled
+    # for an uncovered event (same convention region_mean_score already
+    # uses) - lets a caller compute e.g. min_best_event_score for *this*
+    # combination, not the independent per-event argmax prioritize_videos()
+    # would use.
+    region_scores: tuple[float, ...]
 
 
 def _effective_order_weight(
@@ -220,6 +227,7 @@ def assemble_region_tuples_for_video(
                     order_score=order,
                     region_ids=tuple(region.id if region is not None else None for region in selected),
                     timestamps=timestamps,
+                    region_scores=tuple(scores),
                 )
             )
             return
@@ -241,14 +249,30 @@ def rank_videos_by_region_tuples(
     event_ids: Sequence[str],
     params: TupleRankingHyperparameters,
     order_constraints: Sequence[tuple[int, int]] | None = None,
+    constraints: SearchConstraints | None = None,
 ) -> tuple[list[tuple[str, float]], dict[str, list[TupleRankingResult]]]:
     """Videos ranked by pooled tuple score (raw, not yet normalized to
     [0,1] - callers writing this into a `UnitScore` field should
     `algorithms.robust_sigmoid()` the scores first, same as
     `assemble_ordered_tuples()` already does for its own raw scores), plus
     each video's kept tuples (so a caller can also read off the winning
-    tuple's per-event anchors for e.g. seeding boundary refinement)."""
+    tuple's per-event anchors for e.g. seeding boundary refinement).
 
+    `constraints` (rejected/fixed videos and regions from Stage 6's
+    interactive correction) is applied the same way `prioritize_videos()`
+    applies it - via `_region_allowed`, filtering `regions` before pooling -
+    so a region a user explicitly rejected or a different, unpinned region
+    can never win a tuple. Before this, tuple ranking read the raw,
+    unfiltered region set directly; a whole rejected *video* happened to
+    still disappear from the final API response (the router's merge step
+    only keeps videos also present in the constraint-respecting baseline
+    list), but a rejected *region* or an unmet `fixed_region_id` pin inside
+    an otherwise-valid video was not honored - confirmed by grep, not
+    assumption: this module had no reference to `SearchConstraints` or
+    `_region_allowed` at all until this fix."""
+
+    if constraints is not None:
+        regions = [region for region in regions if _region_allowed(region, constraints)]
     video_ids = sorted({region.video_id for region in regions})
     video_scores: list[tuple[str, float]] = []
     tuples_by_video: dict[str, list[TupleRankingResult]] = {}

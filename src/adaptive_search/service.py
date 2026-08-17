@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from .algorithms import (
     assemble_ordered_tuples,
+    atomic_regions,
     calibrate_frame_scores,
-    cluster_temporal_regions,
     prioritize_videos,
     select_refinement_frontier,
 )
@@ -27,6 +27,7 @@ from .schemas import (
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
+    TemporalRegion,
 )
 from .providers import FrameProvider, UnavailableFrameProvider
 from .proposal_profiles import generate_profiled_proposals
@@ -233,10 +234,14 @@ class AdaptiveSearchService:
                 if item.event_id not in replaced_events
             ]
             bundle.artifacts.candidates = [*retained, *fused_candidates]
-            bundle.artifacts.regions = cluster_temporal_regions(
-                bundle.artifacts.candidates,
-                bundle.session.hyperparameters.clustering,
-            )
+            # atomic_regions, not cluster_temporal_regions - see that
+            # function's docstring (algorithms.py) for why merging candidates
+            # was dropped. Zero-width (no margin) - ranking and refinement
+            # never read region span, and the one consumer that does
+            # (replace_frame_scores) now computes its own scoped, guarded
+            # margin at validation time instead of reading a pre-padded span
+            # every region used to carry for that one feature's sake.
+            bundle.artifacts.regions = atomic_regions(bundle.artifacts.candidates)
             event_order = [event.event_id for event in bundle.session.events]
             priorities = prioritize_videos(
                 bundle.artifacts.regions,
@@ -319,7 +324,12 @@ class AdaptiveSearchService:
                 raise AdaptiveInputError(
                     "frame score event/video must match its temporal region"
                 )
-            if not (region.start_seconds <= sample.timestamp_seconds <= region.end_seconds):
+            window_start, window_end = _frame_score_acceptance_window(
+                region,
+                snapshot.artifacts.regions,
+                snapshot.session.hyperparameters.clustering.margin_seconds,
+            )
+            if not (window_start <= sample.timestamp_seconds <= window_end):
                 raise AdaptiveInputError("frame score timestamp lies outside its region")
             sampled_regions.add(sample.region_id)
         regions_without_samples = replaced_regions - sampled_regions
@@ -723,6 +733,36 @@ def _rebuild_reusable_artifacts(
         _rebuild_tuples(bundle)
     elif invalidated == ["tuple"]:
         _rebuild_tuples(bundle)
+
+
+def _frame_score_acceptance_window(
+    region: TemporalRegion,
+    all_regions: Sequence[TemporalRegion],
+    margin_seconds: float,
+) -> tuple[float, float]:
+    """The timestamp window a `replace_frame_scores` sample must fall within
+    to count as evidence for `region`'s event.
+
+    Anchored on the region's own representative timestamp (span midpoint -
+    exact for a zero-width region, the production default; a reasonable
+    center for a wider one) and padded by `margin_seconds` on each side, but
+    never past the midpoint to the nearest region belonging to a *different*
+    event in the same video. Without that cap, a wide margin could accept a
+    frame that legitimately belongs to a neighboring event as if it were
+    evidence for this one - not a hypothetical: 25% of top-ranked videos on
+    the real n=60 corpus have two different events landing on the same or
+    near-same timestamp (region_tuple_ranking_results.md). This is the only
+    place region width/margin is computed in the pipeline - ranking and
+    refinement never read it (see `algorithms.py::atomic_regions`)."""
+
+    anchor = (region.start_seconds + region.end_seconds) / 2.0
+    effective_margin = margin_seconds
+    for other in all_regions:
+        if other.video_id != region.video_id or other.event_id == region.event_id:
+            continue
+        other_anchor = (other.start_seconds + other.end_seconds) / 2.0
+        effective_margin = min(effective_margin, abs(other_anchor - anchor) / 2.0)
+    return (anchor - effective_margin, anchor + effective_margin)
 
 
 def _rebuild_tuples(bundle: SessionBundle) -> None:

@@ -123,7 +123,6 @@ def _run_adaptive_search(
     *,
     limit: int,
     apply_refinement: bool,
-    apply_tuple_ranking: bool = False,
     common_query: str | None = None,
 ) -> dict[str, Any]:
     session = client.create_session_from_queries(queries=lines, common_query=common_query)
@@ -140,7 +139,6 @@ def _run_adaptive_search(
         session_id,
         limit=limit,
         apply_boundary_refinement=apply_refinement,
-        apply_tuple_ranking=apply_tuple_ranking,
     )
     return {
         "pipeline": "adaptive_coarse",
@@ -149,7 +147,6 @@ def _run_adaptive_search(
         "all_events": all_events,
         "display_limit": limit,
         "apply_refinement": apply_refinement,
-        "apply_tuple_ranking": apply_tuple_ranking,
         "capability": page.get("boundary_refinement_capability") or {},
         "items": _normalize_adaptive_items(page, len(lines)),
     }
@@ -235,7 +232,6 @@ def _reject_item(client: TemporalApiClient, reject_key: str) -> None:
             payload["session_id"],
             limit=payload["display_limit"],
             apply_boundary_refinement=payload["apply_refinement"],
-            apply_tuple_ranking=payload.get("apply_tuple_ranking", False),
         )
         payload["items"] = _normalize_adaptive_items(page, payload["event_count"])
         payload["capability"] = page.get("boundary_refinement_capability") or {}
@@ -273,7 +269,6 @@ def _confirm_fixed_frame(
                 session_id,
                 limit=payload["display_limit"],
                 apply_boundary_refinement=payload["apply_refinement"],
-                apply_tuple_ranking=payload.get("apply_tuple_ranking", False),
             )
             payload["items"] = _normalize_adaptive_items(page, payload["event_count"])
             payload["capability"] = page.get("boundary_refinement_capability") or {}
@@ -552,24 +547,6 @@ with st.expander("Advanced options"):
             f"{result_limit} results with refinement on can take a while (roughly "
             f"1-1.5s per result per moment) - lower 'Number of results' for a faster search."
         )
-    if pipeline == "adaptive_coarse":
-        apply_tuple_ranking = st.checkbox(
-            "Tuple-aware ranking (experimental)",
-            value=False,
-            help=(
-                "Ranks videos by jointly considering all events' candidate regions together "
-                "(rewarding a video whose events land in the right chronological order) instead "
-                "of picking each event's best match independently. Benchmarked on real YouCook2 "
-                "queries at +15% final_query_score over the default ranking (n=30 sample - see "
-                "irrelevant_things/benchmarks/youcook2/region_tuple_ranking_results.md). "
-                "Pure CPU, no extra latency; when combined with 'Refine timestamps', refinement "
-                "also seeds from this joint choice instead of each event's independent match."
-            ),
-        )
-    else:
-        apply_tuple_ranking = False
-        st.caption("Tuple-aware ranking is only available for Adaptive search.")
-
 search_clicked = st.button("Search", type="primary")
 
 if search_clicked:
@@ -577,7 +554,6 @@ if search_clicked:
     st.session_state[K.SEARCH_QUERY_TEXT] = query_text
     st.session_state[K.SEARCH_PIPELINE] = pipeline
     st.session_state[K.SEARCH_APPLY_REFINEMENT] = apply_refinement
-    st.session_state[K.SEARCH_APPLY_TUPLE_RANKING] = apply_tuple_ranking
     st.session_state[K.SEARCH_ERROR] = None
     st.session_state[K.SEARCH_REJECTED_IDS] = set()
     if not lines:
@@ -592,7 +568,6 @@ if search_clicked:
                         lines,
                         limit=result_limit,
                         apply_refinement=apply_refinement,
-                        apply_tuple_ranking=apply_tuple_ranking,
                         common_query=common_query,
                     )
                 else:

@@ -451,7 +451,6 @@ class TemporalApiClient:
         offset: int = 0,
         limit: int = 100,
         apply_boundary_refinement: bool = True,
-        apply_tuple_ranking: bool = False,
     ) -> dict[str, Any]:
         return self._request(
             "GET",
@@ -460,7 +459,6 @@ class TemporalApiClient:
                 "offset": offset,
                 "limit": limit,
                 "apply_boundary_refinement": apply_boundary_refinement,
-                "apply_tuple_ranking": apply_tuple_ranking,
             },
         )
 

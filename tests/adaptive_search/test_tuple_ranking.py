@@ -4,8 +4,10 @@ import unittest
 
 from adaptive_search.algorithms import prioritize_videos
 from adaptive_search.schemas import (
+    EventConstraint,
     EventDefinition,
     RefinementHyperparameters,
+    SearchConstraints,
     SparseCandidate,
     TemporalRegion,
     TupleRankingHyperparameters,
@@ -247,6 +249,12 @@ class ConfidenceGateTests(unittest.TestCase):
         self.assertEqual(params.confidence_gate_threshold, 0.5)
         self.assertEqual(params.order_weight, 0.8)
         self.assertEqual(params.pooling, "max")
+        # Round 8: N and the combinations cap are effectively unbounded -
+        # a real exhaustive search (n=60) found the old N=20/cap=20000
+        # never actually truncated anything on this corpus (byte-identical
+        # ranks on 59/60 videos, identical aggregate metrics, +3.2% time).
+        self.assertEqual(params.max_regions_per_event, 100_000)
+        self.assertEqual(params.max_combinations_per_video, 10_000_000)
 
     def test_linear_gate_suppresses_order_bonus_for_weak_tuple(self) -> None:
         regions = [
@@ -377,6 +385,49 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
             if timestamp is not None
         }
         self.assertEqual(anchors, {"e1": 10.0, "e2": 20.0})
+
+    def test_rejected_region_is_never_selected(self) -> None:
+        # r1 outscores r2 (0.9 vs 0.5) and would win with no constraints -
+        # rejecting r1 must force the winning tuple onto r2, not just lower
+        # its rank within an unchanged pool.
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.9),
+            _region("r2", event_id="e1", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.5),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e1", video_id="v1", timestamp_seconds=20.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(relative_delta=1.0)
+        constraints = SearchConstraints(
+            event_constraints={"e1": EventConstraint(rejected_region_ids=frozenset({"r1"}))}
+        )
+        _, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        winner = tuples_by_video["v1"][0]
+        self.assertEqual(winner.region_ids, ("r2",))
+
+    def test_fixed_region_id_is_always_selected(self) -> None:
+        # Same pool, opposite mechanism: pinning r2 (the lower scorer) must
+        # force it to win even though r1 would otherwise be preferred.
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.9),
+            _region("r2", event_id="e1", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.5),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e1", video_id="v1", timestamp_seconds=20.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(relative_delta=1.0)
+        constraints = SearchConstraints(
+            event_constraints={"e1": EventConstraint(fixed_region_id="r2")}
+        )
+        _, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        winner = tuples_by_video["v1"][0]
+        self.assertEqual(winner.region_ids, ("r2",))
 
 
 def _event(event_id, *, relation="unknown", reference=None):
