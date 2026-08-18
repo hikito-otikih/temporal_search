@@ -6,8 +6,8 @@ Backend: `src/main.py` (port 8001), upstream sparse-search service thật (port 
 dense scoring thật (`google/siglip2-base-patch16-224`, pinned revision, GPU).
 
 Tài liệu này ghi lại việc đưa kết quả benchmark của
-[`hyperparameter_sweep_results.md`](../irrelevant_things/benchmarks/youcook2/hyperparameter_sweep_results.md)
-và [`boundary_refinement_results.md`](../irrelevant_things/benchmarks/youcook2/boundary_refinement_results.md)
+[`hyperparameter_sweep_results.md`](../research_tools/benchmarks/youcook2/hyperparameter_sweep_results.md)
+và [`boundary_refinement_results.md`](../research_tools/benchmarks/youcook2/boundary_refinement_results.md)
 vào service thật: cập nhật hyperparameter mặc định, loại bỏ code path chỉ phục
 vụ `adaptive_full`, đưa `boundary_refinement` thành một stage thật (opt-in) cho
 cả `adaptive_search` và `legacy_search`, và xác minh lại toàn bộ pipeline bằng
@@ -20,7 +20,7 @@ HTTP request thật vào service đang chạy (không phải benchmark bypass-HT
 | `POST /v1/search-sessions/{id}/commands/refine` | Có (frontier-wide decode + dense scoring, orchestrator ~921 dòng) | **Đã xoá** — benchmark xác nhận không bao giờ thắng `adaptive_coarse` trên dữ liệu thật, chi phí GPU cao hơn |
 | `GET /v1/search-sessions/{id}/tuples` | Có | **Đã xoá** — HTTP surface duy nhất đọc lại `assemble_ordered_tuples`; nội bộ `bundle.artifacts.tuples` vẫn được `POST .../artifacts/frame-scores` và `commands/fix-frame` cập nhật (không xoá logic, chỉ xoá endpoint đọc) |
 | `RefineSessionRequest`, `LiveRefinementOrchestrator` | Có | **Đã xoá** (đổi tên/thu gọn thành `BoundaryRefinementRuntime` trong `refinement_runtime.py`, ~230 dòng) |
-| `boundary_refinement.py`, `coarse_anchor.py` (region-seed) | Chỉ có trong `irrelevant_things/benchmarks/youcook2/` | **Port vào `src/adaptive_search/boundary_refinement.py` + `boundary_seeds.py`**, dùng lại `bundle.artifacts.regions/candidates` đã có sẵn trong session thay vì bypass-HTTP |
+| `boundary_refinement.py`, `coarse_anchor.py` (region-seed) | Chỉ có trong `research_tools/benchmarks/youcook2/` | **Port vào `src/adaptive_search/boundary_refinement.py` + `boundary_seeds.py`**, dùng lại `bundle.artifacts.regions/candidates` đã có sẵn trong session thay vì bypass-HTTP |
 | `GET /v1/search-sessions/{id}/video-priorities` | Trả `priorities` thô, không refine | Có thêm `apply_boundary_refinement` (query param, **mặc định `true`**), refine **mọi** event của **mọi** video trả về, kèm `boundary_refinement_capability` |
 | `POST /temporal-search` (legacy_temporal, legacy_ambiguous) | Không refine | Có thêm `apply_boundary_refinement` (body field, **mặc định `false`**), refine mọi candidate trong mọi tuple trả về |
 | `RetrievalHyperparameters` | `top_n_per_variant=200, top_n_fused=500` | `top_n_per_variant=500, top_n_fused=1000` (xem §3) |
@@ -320,11 +320,14 @@ nữa; `GET /v1/searchers` xác nhận `live_refinement_available=true` trở l�
   (đưa code + default vào service thật) hoạt động đúng, không đo lại chất
   lượng tìm kiếm.
 - **3 tài liệu cũ (`ADAPTIVE_TEMPORAL_SEARCH.md`, `STREAMLIT_UI_IMPLEMENTATION_PLAN.md`,
-  `YOUCOOK2_RUNTIME_AND_BENCHMARK.md`) vẫn còn mô tả `commands/refine`/
-  `GET /tuples` cũ** — các endpoint này đã bị xoá theo migration này nhưng 3
-  file trên **chưa được cập nhật lại** (ngoài phạm vi công việc này). Tài liệu
-  hiện tại (`ADAPTIVE_PIPELINE_MIGRATION.md`) là nguồn đúng nhất cho trạng thái
-  endpoint sau migration; cần cập nhật 3 file kia ở một lần làm việc khác.
+  `YOUCOOK2_RUNTIME_AND_BENCHMARK.md`) từng mô tả `commands/refine`/
+  `GET /tuples` cũ như thể còn hoạt động** — đã được sửa (2026-08-18): mỗi file
+  thêm banner/ghi chú trỏ về tài liệu này, và các bảng endpoint/luồng cụ thể
+  (không phải toàn bộ văn xuôi liên quan) đã được cập nhật để phản ánh đúng
+  `GET .../video-priorities` thay cho `GET .../tuples`, và
+  `POST .../commands/retrieve` thay cho `POST .../commands/refine`. Tài liệu
+  hiện tại (`ADAPTIVE_PIPELINE_MIGRATION.md`) vẫn là nguồn đúng nhất cho trạng
+  thái endpoint sau migration.
 - **`legacy_search` recall thấp ở `top_k_each_query` nhỏ** (§7.2) không được
   cải thiện trong phạm vi migration này — chỉ đúng khi flag refine bật/tắt
   đều cho kết quả giống hệt nhau về mặt retrieval, đúng như kỳ vọng.

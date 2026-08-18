@@ -17,8 +17,9 @@ from .constants import (
     COMMON_QUERY_INSTRUCTION_SUFFIX,
     CONTEXT_STOPWORDS,
     CONTEXT_TERM_PATTERN,
-    MAX_ANALYSIS_ATTEMPTS,
     MAX_RETRY_RESPONSE_CHARS,
+    MAX_TRANSPORT_ATTEMPTS,
+    MAX_VALIDATION_ATTEMPTS,
     OLLAMA_RETRY_DELAY_SECONDS,
     SYSTEM_PROMPT,
     TRANSIENT_OLLAMA_STATUSES,
@@ -179,6 +180,25 @@ def _validate_standalone_context(
     if not context_terms:
         return
 
+    # retrieval_queries_en gets no term-matching check below (context_terms
+    # are extracted from the Vietnamese common_query - checking whether
+    # translated English text literally contains Vietnamese words is not
+    # meaningful, unlike the retrieval_queries_vi check). This narrower,
+    # language-agnostic check instead catches the most common way EN
+    # coverage silently goes missing despite SYSTEM_PROMPT explicitly
+    # requiring it (build_analysis_prompt's REQUIRED_STANDALONE_CONTEXT
+    # block): the LLM echoing original_query back unchanged as an EN
+    # "translation" instead of actually translating and expanding it.
+    for index, event in enumerate(analysis.events):
+        original_normalized = event.original_query.strip().casefold()
+        for query_index, en_query in enumerate(event.retrieval_queries_en):
+            if en_query.strip().casefold() == original_normalized:
+                raise SemanticValidationError(
+                    f'events[{index}].retrieval_queries_en[{query_index}] must be '
+                    'an English translation carrying the same standalone context, '
+                    'not a literal copy of original_query'
+                )
+
     minimum_matches = min(2, len(context_terms))
     for index, event in enumerate(analysis.events):
         standalone_fields = [
@@ -261,11 +281,23 @@ def _repair_standalone_context(
         original_terms = set(
             CONTEXT_TERM_PATTERN.findall(event.original_query.casefold())
         )
+        # Must include anchor_query here, matching _validate_standalone_context's
+        # own standalone_fields set exactly - anchor_query is mutated above
+        # just like target_moment_vi/retrieval_queries_vi, so omitting it
+        # from this event's own "did we introduce new inherited terms" check
+        # let a term introduced only via anchor_query's prefix go completely
+        # unaccounted for. inferred_information would then stay empty here
+        # while _validate_standalone_context's re-check below (which does
+        # include anchor_query) found a real, unreported inherited term -
+        # raising SemanticValidationError from a call site with no
+        # surrounding handler, an uncaught 500 for output this function
+        # itself produced.
         standalone_terms = set(
             CONTEXT_TERM_PATTERN.findall(
                 ' '.join(
                     [
                         event.target_moment_vi,
+                        event.anchor_query,
                         *event.retrieval_queries_vi,
                     ]
                 ).casefold()
@@ -282,7 +314,34 @@ def _repair_standalone_context(
             ]
 
     _validate_standalone_context(repaired, common_query)
-    return repaired
+    # The mutations above are plain attribute assignment on an already-
+    # validated model (validate_assignment is not enabled), so a field's own
+    # schema constraints - max_length in particular, now that context_prefix
+    # has been prepended - are never re-checked. A full model round-trip
+    # forces that check: any now-oversized field raises here (caught by
+    # _repair_standalone_context_or_fail below) instead of shipping in the
+    # HTTP response as if it were still schema-valid.
+    return RewriteResponse.model_validate(repaired.model_dump())
+
+
+def _repair_standalone_context_or_fail(
+    analysis: RewriteResponse,
+    common_query: str | None,
+) -> RewriteResponse:
+    """Wraps `_repair_standalone_context` so a repair that still can't
+    satisfy full validation - its heuristic text-prefixing reconstruction is
+    not guaranteed to succeed in every case - surfaces as the same
+    already-handled `OllamaServiceError` every other exhausted-retry path in
+    `rewrite_queries` already raises, not an uncaught `SemanticValidationError`
+    or `ValidationError` (a 500, not the intended error response)."""
+
+    try:
+        return _repair_standalone_context(analysis, common_query)
+    except (SemanticValidationError, ValidationError) as exc:
+        raise OllamaServiceError(
+            'Ollama returned structurally valid but semantically inconsistent '
+            f'output that automatic repair could not fix: {exc}'
+        ) from exc
 
 
 def _parse_analysis(
@@ -335,13 +394,22 @@ async def rewrite_queries(
     validation_errors: str | None = None
     last_structured_analysis: RewriteResponse | None = None
     last_semantic_error: str | None = None
+    # Separate counters (MAX_TRANSPORT_ATTEMPTS / MAX_VALIDATION_ATTEMPTS) -
+    # a transport blip and a validation failure are unrelated failure
+    # categories that used to share one budget, so a single network hiccup
+    # could consume attempts the repair-retry loop needed. Reaching either
+    # cap ends the function (raise, or fall through to the final fallback
+    # below); nothing else in the loop body increments a counter without
+    # also returning/raising/breaking, so this can't spin forever.
+    transport_attempts = 0
+    validation_attempts = 0
 
     async with httpx.AsyncClient(
         headers=headers,
         timeout=OLLAMA_TIMEOUT_SECONDS,
         transport=transport,
     ) as client:
-        for attempt in range(MAX_ANALYSIS_ATTEMPTS):
+        while True:
             payload = {
                 'model': resolved_model,
                 'messages': [
@@ -364,75 +432,79 @@ async def rewrite_queries(
             try:
                 response = await client.post(resolved_api_url, json=payload)
             except httpx.TimeoutException as exc:
+                transport_attempts += 1
                 logger.warning(
                     'rewrite_failed category=ollama_timeout attempt=%s/%s',
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    transport_attempts,
+                    MAX_TRANSPORT_ATTEMPTS,
                 )
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
                 ):
-                    return _repair_standalone_context(
+                    return _repair_standalone_context_or_fail(
                         last_structured_analysis,
                         common_query,
                     )
                 raise OllamaTimeoutError('Ollama request timed out') from exc
             except httpx.RequestError as exc:
+                transport_attempts += 1
                 logger.warning(
                     'rewrite_failed category=ollama_connection_failed '
                     'attempt=%s/%s',
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    transport_attempts,
+                    MAX_TRANSPORT_ATTEMPTS,
                 )
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
                 ):
-                    return _repair_standalone_context(
+                    return _repair_standalone_context_or_fail(
                         last_structured_analysis,
                         common_query,
                     )
-                if attempt + 1 < MAX_ANALYSIS_ATTEMPTS:
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
                     await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
                     continue
                 raise OllamaServiceError('Could not connect to Ollama') from exc
 
             if response.status_code == 429:
+                transport_attempts += 1
                 logger.warning(
                     'rewrite_failed category=ollama_rate_limited '
                     'attempt=%s/%s',
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    transport_attempts,
+                    MAX_TRANSPORT_ATTEMPTS,
                 )
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
                 ):
-                    return _repair_standalone_context(
+                    return _repair_standalone_context_or_fail(
                         last_structured_analysis,
                         common_query,
                     )
                 raise OllamaRateLimitError('Ollama rate limit exceeded')
             if response.is_error:
+                transport_attempts += 1
                 logger.warning(
                     'rewrite_failed category=ollama_http_error status=%s '
                     'attempt=%s/%s',
                     response.status_code,
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    transport_attempts,
+                    MAX_TRANSPORT_ATTEMPTS,
                 )
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
                 ):
-                    return _repair_standalone_context(
+                    return _repair_standalone_context_or_fail(
                         last_structured_analysis,
                         common_query,
                     )
                 if (
                     response.status_code in TRANSIENT_OLLAMA_STATUSES
-                    and attempt + 1 < MAX_ANALYSIS_ATTEMPTS
+                    and transport_attempts < MAX_TRANSPORT_ATTEMPTS
                 ):
                     await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
                     continue
@@ -454,29 +526,35 @@ async def rewrite_queries(
             try:
                 analysis = _parse_analysis(content, queries)
             except (ValidationError, ValueError) as exc:
+                validation_attempts += 1
                 previous_response = content
                 validation_errors = _format_validation_error(exc)
                 logger.warning(
                     'rewrite_validation_failed kind=structure '
                     'attempt=%s/%s',
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    validation_attempts,
+                    MAX_VALIDATION_ATTEMPTS,
                 )
+                if validation_attempts >= MAX_VALIDATION_ATTEMPTS:
+                    break
                 continue
 
             last_structured_analysis = analysis
             try:
                 _validate_standalone_context(analysis, common_query)
             except SemanticValidationError as exc:
+                validation_attempts += 1
                 previous_response = content
                 validation_errors = _format_validation_error(exc)
                 last_semantic_error = validation_errors
                 logger.warning(
                     'rewrite_validation_failed kind=semantic '
                     'attempt=%s/%s',
-                    attempt + 1,
-                    MAX_ANALYSIS_ATTEMPTS,
+                    validation_attempts,
+                    MAX_VALIDATION_ATTEMPTS,
                 )
+                if validation_attempts >= MAX_VALIDATION_ATTEMPTS:
+                    break
                 continue
 
             return analysis
@@ -484,9 +562,9 @@ async def rewrite_queries(
     if last_structured_analysis is not None and last_semantic_error is not None:
         logger.warning(
             'rewrite_context_repair_applied after_attempts=%s',
-            MAX_ANALYSIS_ATTEMPTS,
+            validation_attempts,
         )
-        return _repair_standalone_context(
+        return _repair_standalone_context_or_fail(
             last_structured_analysis,
             common_query,
         )
@@ -494,7 +572,7 @@ async def rewrite_queries(
     error_detail = validation_errors or 'unknown validation error'
     logger.error(
         'rewrite_failed category=ollama_invalid_output attempts=%s',
-        MAX_ANALYSIS_ATTEMPTS,
+        validation_attempts,
     )
     raise OllamaServiceError(
         'Ollama returned invalid structured analysis after retry: '

@@ -48,6 +48,11 @@ Thumbs.db
 # Logs
 *.log
 
+# LaTeX build intermediates (keep the compiled .pdf and .tex sources)
+*.aux
+*.out
+*.toc
+
 # Type checkers / caches
 .mypy_cache/
 .pytype/
@@ -67,5 +72,8 @@ data/output.json
 data/*.tmp
 
 # Local benchmark artifacts and resumable checkpoints
+# (leading **/ so this matches regardless of nesting depth - the previous
+# unanchored form only matched a top-level benchmarks/ directory and never
+# actually caught benchmarks/youcook2/runs/ nested under research_tools/)
 benchmark_runs/
-benchmarks/**/runs/
+**/benchmarks/**/runs/

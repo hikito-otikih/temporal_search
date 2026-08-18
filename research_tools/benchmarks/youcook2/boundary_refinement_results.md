@@ -339,7 +339,7 @@ crossing on second-precision ground truth — not the clustering window or the s
 ## Reproducibility
 
 ```bash
-cd irrelevant_things
+cd research_tools
 export YOUCOOK2_DATA_ROOT=/mnt/c/Users/huynh/Downloads/youcook2
 export YOUCOOK2_METADATA_ROOT=/mnt/c/Users/huynh/Downloads/youcook2
 export ADAPTIVE_SIGLIP2_MODEL=google/siglip2-base-patch16-224

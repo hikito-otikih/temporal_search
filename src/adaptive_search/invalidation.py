@@ -28,11 +28,10 @@ PARAMETER_STAGE_PREFIXES: dict[str, str] = {
     "refinement.max_regions_per_event_per_video": "frontier",
     "refinement.max_total_regions": "frontier",
     "refinement.exploration_region_ratio": "frontier",
-    "refinement.max_frames_per_run": "frontier",
     "refinement": "refinement",
     "embedding": "refinement",
     "boundary": "proposal",
-    "ranking": "tuple",
+    "tuple_ranking": "tuple",
 }
 
 

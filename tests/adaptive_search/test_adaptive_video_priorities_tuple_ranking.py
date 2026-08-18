@@ -111,10 +111,15 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         boundary_refinement_runtime.frame_provider = self._original_provider
         boundary_refinement_runtime.embedder = self._original_embedder
 
-    def _create_session(self, events, tuple_ranking_overrides=None):
+    def _create_session(self, events, tuple_ranking_overrides=None, refinement_overrides=None):
         payload = {"events": events}
+        hyperparameters = {}
         if tuple_ranking_overrides is not None:
-            payload["hyperparameters"] = {"tuple_ranking": tuple_ranking_overrides}
+            hyperparameters["tuple_ranking"] = tuple_ranking_overrides
+        if refinement_overrides is not None:
+            hyperparameters["refinement"] = refinement_overrides
+        if hyperparameters:
+            payload["hyperparameters"] = hyperparameters
         response = self.client.post("/v1/search-sessions", json=payload)
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()["session"]["id"]
@@ -147,6 +152,70 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         item = response.json()["items"][0]
         self.assertEqual(item["video_id"], "video_full")
         self.assertTrue(0.0 <= item["priority_score"] <= 1.0)
+
+    def test_fixed_frame_is_respected_by_ranking_itself_not_only_by_boundary_refinement(self):
+        # Distinct from test_user_fixed_frame_still_wins_over_tuple_ranking
+        # (which only checks the opt-in apply_boundary_refinement per-event
+        # breakdown): commands/fix-frame's timestamp is arbitrary, with no
+        # candidate anywhere near it, so the ranker itself must synthesize a
+        # region for it - confirmed here via mean_best_event_score (should
+        # land at 1.0, the synthesized region's confidence, not near the
+        # real 0.6 candidate's score) with apply_boundary_refinement never
+        # requested at all.
+        session_id = self._create_session([event("e1", "cut onion")])
+        self._submit_candidates(
+            session_id, ["e1"],
+            [candidate("c1", session_id, "e1", "video_full", 10.0, 0.6)],
+        )
+        fix_response = self.client.post(
+            f"/v1/search-sessions/{session_id}/commands/fix-frame",
+            json={
+                "expected_revision": 0,
+                "event_id": "e1",
+                "video_id": "video_full",
+                "frame_id": 1260,
+                "timestamp_seconds": 42.0,
+            },
+        )
+        self.assertEqual(fix_response.status_code, 200, fix_response.text)
+
+        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["video_id"], "video_full")
+        self.assertAlmostEqual(item["mean_best_event_score"], 1.0)
+
+    def test_video_distinctness_weight_affects_ranking(self):
+        # Reproduces the reported gap directly: video_distinctness_weight
+        # was fully validated/settable but read only by prioritize_videos(),
+        # which this endpoint stopped calling entirely - so two videos with
+        # identical region scores but different distinctness got identical
+        # priority_score (0.5/0.5) regardless of the weight. video_a's two
+        # events collapse onto the same timestamp (distinctness 0);
+        # video_b's are 90s apart (distinctness 1, norm=3.0s default) -
+        # same region scores otherwise, order_weight=0 so the raw tuple
+        # score is driven only by region_mean, identical for both.
+        session_id = self._create_session(
+            [event("e1", "cut onion"), event("e2", "fry onion")],
+            tuple_ranking_overrides={"order_weight": 0.0},
+            refinement_overrides={"video_distinctness_weight": 100.0},
+        )
+        self._submit_candidates(
+            session_id, ["e1", "e2"],
+            [
+                candidate("ca1", session_id, "e1", "video_a", 10.0, 0.9),
+                candidate("ca2", session_id, "e2", "video_a", 10.0, 0.9),
+                candidate("cb1", session_id, "e1", "video_b", 10.0, 0.9),
+                candidate("cb2", session_id, "e2", "video_b", 100.0, 0.9),
+            ],
+        )
+        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        self.assertEqual(response.status_code, 200, response.text)
+        items = {item["video_id"]: item for item in response.json()["items"]}
+        self.assertEqual(items["video_a"]["distinctness"], 0.0)
+        self.assertEqual(items["video_b"]["distinctness"], 1.0)
+        self.assertGreater(items["video_b"]["priority_score"], items["video_a"]["priority_score"])
+        self.assertEqual(response.json()["items"][0]["video_id"], "video_b")
 
     def test_boundary_refinement_seeds_from_the_winning_tuple(self):
         # e1's best-scoring candidate (10.0) and e2's best-scoring candidate

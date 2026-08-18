@@ -428,6 +428,47 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request_count, 2)
         self.assertIn('múa lân', result.events[0].target_moment_vi)
 
+    async def test_transport_and_validation_failures_have_separate_budgets(self) -> None:
+        # One transient transport failure (503) followed by one structural
+        # validation failure followed by a valid response: 3 total calls.
+        # With the old shared budget of 2, the second call (structural
+        # failure) would have exhausted the whole budget and the function
+        # would have given up before ever reaching the valid 3rd response -
+        # a transport blip on call 1 has nothing to do with whether the
+        # LLM's *output* was well-formed, so it shouldn't cost the
+        # validation-retry loop any of its own attempts.
+        query = 'Một sự kiện.'
+        expected = analysis_payload([query])
+        request_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                return httpx.Response(503, json={'error': 'temporary'})
+            if request_count == 2:
+                return httpx.Response(
+                    200, json={'message': {'content': 'not valid json at all'}}
+                )
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(expected, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(request_count, 3)
+        self.assertEqual(result.model_dump(), expected)
+
     async def test_retries_a_transient_upstream_error(self) -> None:
         query = 'Một sự kiện.'
         expected = analysis_payload([query])

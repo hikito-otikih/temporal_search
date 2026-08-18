@@ -52,7 +52,14 @@ def render_hyperparameter_editor(
     st.caption("Client-side validation mirrors backend bounds. Nothing is sent "
                "until **Apply & recompute** is pressed.")
 
-    tabs = st.tabs(["Retrieval", "Clustering", "Refinement", "Boundary", "Ranking"])
+    # No "Tuple Ranking" tab: this editor never grew one for
+    # TupleRankingHyperparameters (the sole ranking algorithm's own
+    # settings) - it only ever exposed the now-removed RankingHyperparameters
+    # ("ranking" section, retired with assemble_ordered_tuples). Adjusting
+    # tuple_ranking.* currently requires calling PATCH .../hyperparameters
+    # directly; a real tab for it is a feature gap, not something this
+    # cleanup pass added.
+    tabs = st.tabs(["Retrieval", "Clustering", "Refinement", "Boundary"])
 
     with tabs[0]:
         _retrieval_tab(draft)
@@ -62,8 +69,6 @@ def render_hyperparameter_editor(
         _refinement_tab(draft)
     with tabs[3]:
         _boundary_tab(draft)
-    with tabs[4]:
-        _ranking_tab(draft)
 
     col1, col2, col3 = st.columns(3)
     if col1.button("Diff from session", use_container_width=True):
@@ -138,14 +143,8 @@ def _refinement_tab(draft: dict[str, Any]) -> None:
         section["max_initial_videos"] = int(_number("f", "max_initial_videos", section.get("max_initial_videos", 5), 1, 1000, 1))
         section["max_regions_per_event_per_video"] = int(_number("f", "max_regions_per_event_per_video", section.get("max_regions_per_event_per_video", 3), 1, 100, 1))
         section["max_total_regions"] = int(_number("f", "max_total_regions", section.get("max_total_regions", 60), 1, 10_000, 1))
-        section["max_frames_per_run"] = int(_number("f", "max_frames_per_run", section.get("max_frames_per_run", 2000), 1, 1_000_000, 1))
     with c2:
         section["exploration_region_ratio"] = float(_number("f", "exploration_region_ratio", section.get("exploration_region_ratio", 0.15), 0.0, 1.0, 0.01))
-        section["medium_interval_seconds"] = float(_number("f", "medium_interval_seconds", section.get("medium_interval_seconds", 0.5), 0.01, 100.0, 0.01))
-        section["dense_interval_seconds"] = float(_number("f", "dense_interval_seconds", section.get("dense_interval_seconds", 0.1), 0.01, 100.0, 0.01))
-        section["dense_radius_seconds"] = float(_number("f", "dense_radius_seconds", section.get("dense_radius_seconds", 1.0), 0.0, 100.0, 0.1))
-    if section["dense_interval_seconds"] > section["medium_interval_seconds"]:
-        st.warning("dense_interval_seconds must be <= medium_interval_seconds")
     c1, c2, c3 = st.columns(3)
     with c1:
         section["video_coverage_weight"] = float(_number("f", "video_coverage_weight", section.get("video_coverage_weight", 0.5), 0.0, 1.0, 0.05))
@@ -195,20 +194,3 @@ def _boundary_tab(draft: dict[str, Any]) -> None:
         section["window_asymmetry_regularization"] = float(_number("b", "window_asymmetry_regularization", section.get("window_asymmetry_regularization", 0.01), 0.0, 1.0, 0.01))
 
 
-def _ranking_tab(draft: dict[str, Any]) -> None:
-    section = draft.setdefault("ranking", {})
-    c1, c2 = st.columns(2)
-    with c1:
-        section["top_k"] = int(_number("k", "top_k", section.get("top_k", 20), 1, 2000, 1))
-        section["gap_policy"] = st.selectbox("gap_policy", ["hinge"], key="k_gap_policy")
-        section["default_gap_tau_seconds"] = float(_number("k", "default_gap_tau_seconds", section.get("default_gap_tau_seconds", 10.0), 0.0, 3600.0, 0.1))
-        section["gap_lambda"] = float(_number("k", "gap_lambda", section.get("gap_lambda", 0.01), 0.0, 1.0, 0.001))
-    with c2:
-        section["fixed_constraint_bonus"] = float(_number("k", "fixed_constraint_bonus", section.get("fixed_constraint_bonus", 0.02), 0.0, 1.0, 0.01))
-        section["require_strict_order"] = _bool("k", "require_strict_order", section.get("require_strict_order", True))
-        section["max_proposals_per_event_per_video"] = int(_number("k", "max_proposals_per_event_per_video", section.get("max_proposals_per_event_per_video", 8), 1, 1000, 1))
-        section["max_combinations_per_video"] = int(_number("k", "max_combinations_per_video", section.get("max_combinations_per_video", 10_000), 1, 10_000_000, 1))
-        section["max_tuples_per_video"] = int(_number("k", "max_tuples_per_video", section.get("max_tuples_per_video", 200), 1, 100_000, 1))
-        section["max_total_tuples"] = int(_number("k", "max_total_tuples", section.get("max_total_tuples", 2000), 1, 100_000, 1))
-    if section["top_k"] > section["max_total_tuples"]:
-        st.warning("top_k must be <= max_total_tuples")

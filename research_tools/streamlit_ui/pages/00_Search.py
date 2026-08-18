@@ -36,7 +36,7 @@ PIPELINES: dict[str, str] = {
 
 
 # Same query-block format the YouCook2 benchmark's real query files use
-# (irrelevant_things/benchmarks/youcook2/core.py: EVENT_RE/ANSWER_RE) - lets
+# (research_tools/benchmarks/youcook2/core.py: EVENT_RE/ANSWER_RE) - lets
 # people paste a whole "context + E1: ... E2: ..." block straight in instead
 # of retyping it as one moment per line.
 EVENT_LINE = re.compile(r"^\s*E\d+\s*:\s*(.*?)\s*$", re.IGNORECASE)

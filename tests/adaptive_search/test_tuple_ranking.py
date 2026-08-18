@@ -4,6 +4,7 @@ import unittest
 
 from adaptive_search.algorithms import prioritize_videos
 from adaptive_search.schemas import (
+    AdjacentGapConstraint,
     EventConstraint,
     EventDefinition,
     RefinementHyperparameters,
@@ -220,6 +221,94 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         tuples = assemble_region_tuples_for_video("v1", ["e1", "e2"], e1_regions + e2_regions, candidates_by_id, params)
         self.assertLessEqual(len(tuples), 5)
 
+    def test_low_scoring_but_order_satisfying_region_is_found_under_a_tight_cap(self) -> None:
+        """Regression test for a real reported bug: naive lexicographic
+        enumeration explores (r1_0, e2), (r1_1, e2), (r1_2, e2) in exactly
+        that order (pools[1] has one member, nothing to interleave) - a
+        leaf-count cap of 2 would find only the two order-violating,
+        higher-raw-score leaves and never reach the third, correctly-
+        ordered, truly-best one, silently returning score -0.30 as "the
+        best" when the actual best is 1.55. Best-first search must still
+        find the true best despite an equally tight combinations budget
+        (10, well under the 3x1=3 leaves x several expansions this
+        structure needs but far below what an exhaustive scan of a wider
+        pool would require), because it explores by achievable score, not
+        enumeration position."""
+
+        e1_regions = [
+            _region("r1_0", event_id="e1", video_id="v1", candidate_ids=["c1_0"], normalized_coarse_score=0.90, start_seconds=100.0, end_seconds=100.0),
+            _region("r1_1", event_id="e1", video_id="v1", candidate_ids=["c1_1"], normalized_coarse_score=0.89, start_seconds=100.0, end_seconds=100.0),
+            _region("r1_2", event_id="e1", video_id="v1", candidate_ids=["c1_2"], normalized_coarse_score=0.60, start_seconds=1.0, end_seconds=1.0),
+        ]
+        e2_region = _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.50, start_seconds=50.0, end_seconds=50.0)
+        candidates_by_id = {
+            "c1_0": _candidate("c1_0", event_id="e1", video_id="v1", timestamp_seconds=100.0, raw_relevance_score=1.0),
+            "c1_1": _candidate("c1_1", event_id="e1", video_id="v1", timestamp_seconds=100.0, raw_relevance_score=1.0),
+            "c1_2": _candidate("c1_2", event_id="e1", video_id="v1", timestamp_seconds=1.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=50.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, order_weight=1.0, confidence_gate="none",
+            max_combinations_per_video=10, max_tuples_per_video=1,
+        )
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2"], e1_regions + [e2_region], candidates_by_id, params,
+            order_constraints=[(0, 1)],
+        )
+        self.assertEqual(len(tuples), 1)
+        self.assertEqual(tuples[0].region_ids, ("r1_2", "r2"))
+        self.assertAlmostEqual(tuples[0].score, (0.60 + 0.50) / 2 + 1.0)
+
+    def test_adjacent_gap_constraint_hard_rejects_violating_combination(self) -> None:
+        regions = [
+            _region("r1_close", event_id="e1", video_id="v1", candidate_ids=["c1c"], normalized_coarse_score=0.9, start_seconds=10.0, end_seconds=10.0),
+            _region("r1_far", event_id="e1", video_id="v1", candidate_ids=["c1f"], normalized_coarse_score=0.5, start_seconds=1.0, end_seconds=1.0),
+            _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.9, start_seconds=12.0, end_seconds=12.0),
+        ]
+        candidates_by_id = {
+            "c1c": _candidate("c1c", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c1f": _candidate("c1f", event_id="e1", video_id="v1", timestamp_seconds=1.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=12.0, raw_relevance_score=1.0),
+        }
+        constraints = SearchConstraints(
+            adjacent_gap_constraints=(
+                AdjacentGapConstraint(before_event_id="e1", after_event_id="e2", min_gap_seconds=5.0),
+            )
+        )
+        params = TupleRankingHyperparameters(relative_delta=1.0, order_weight=0.0)
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2"], regions, candidates_by_id, params,
+            order_constraints=None, constraints=constraints,
+        )
+        # (r1_close=10.0, r2=12.0): gap=2.0 < min_gap_seconds=5.0 -> rejected.
+        # (r1_far=1.0, r2=12.0): gap=11.0 >= 5.0 -> the only survivor, despite
+        # r1_close scoring higher on its own.
+        self.assertEqual(len(tuples), 1)
+        self.assertEqual(tuples[0].region_ids, ("r1_far", "r2"))
+
+    def test_max_tuple_span_seconds_hard_rejects_wide_combination(self) -> None:
+        regions = [
+            _region("r1_close", event_id="e1", video_id="v1", candidate_ids=["c1c"], normalized_coarse_score=0.9, start_seconds=10.0, end_seconds=10.0),
+            _region("r1_far", event_id="e1", video_id="v1", candidate_ids=["c1f"], normalized_coarse_score=0.5, start_seconds=1.0, end_seconds=1.0),
+            _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.9, start_seconds=11.0, end_seconds=11.0),
+        ]
+        candidates_by_id = {
+            "c1c": _candidate("c1c", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c1f": _candidate("c1f", event_id="e1", video_id="v1", timestamp_seconds=1.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=11.0, raw_relevance_score=1.0),
+        }
+        constraints = SearchConstraints(max_tuple_span_seconds=5.0)
+        params = TupleRankingHyperparameters(relative_delta=1.0, order_weight=0.0)
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2"], regions, candidates_by_id, params,
+            order_constraints=None, constraints=constraints,
+        )
+        # (r1_close=10.0, r2=11.0): span=1.0 <= 5.0 -> allowed.
+        # (r1_far=1.0, r2=11.0): span=10.0 > 5.0 -> rejected, despite r1_far
+        # being a legal (delta-surviving) pool member on its own.
+        self.assertEqual(len(tuples), 1)
+        self.assertEqual(tuples[0].region_ids, ("r1_close", "r2"))
+
 
 class ConfidenceGateTests(unittest.TestCase):
     def test_none_gate_is_unchanged(self) -> None:
@@ -428,6 +517,49 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
         )
         winner = tuples_by_video["v1"][0]
         self.assertEqual(winner.region_ids, ("r2",))
+
+    def test_fixed_timestamp_without_existing_region_is_respected(self) -> None:
+        # commands/fix-frame can set an arbitrary timestamp that doesn't
+        # correspond to any real region - the ranker must still honor it,
+        # not silently fall back to whichever real candidate scored best.
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.95),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=5.0, raw_relevance_score=1.0),
+        }
+        constraints = SearchConstraints(
+            event_constraints={"e1": EventConstraint(fixed_video_id="v1", fixed_timestamp_seconds=42.0)}
+        )
+        params = TupleRankingHyperparameters()
+        _, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        winner = tuples_by_video["v1"][0]
+        self.assertEqual(winner.timestamps, (42.0,))
+
+    def test_fixed_timestamp_excludes_other_videos_for_that_event(self) -> None:
+        # fixed_video_id already means "only this video can satisfy this
+        # event" for fixed_region_id (test above); confirm the same holds
+        # when synthesizing from a bare fixed_timestamp_seconds too - v2's
+        # real, higher-scoring region for e1 must not survive filtering.
+        regions = [
+            _region("v1_e1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.5),
+            _region("v2_e1", event_id="e1", video_id="v2", candidate_ids=["c2"], normalized_coarse_score=0.95),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=5.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e1", video_id="v2", timestamp_seconds=6.0, raw_relevance_score=1.0),
+        }
+        constraints = SearchConstraints(
+            event_constraints={"e1": EventConstraint(fixed_video_id="v1", fixed_timestamp_seconds=42.0)}
+        )
+        params = TupleRankingHyperparameters(relative_delta=1.0)
+        ranking, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        self.assertNotIn("v2", tuples_by_video)
+        self.assertEqual(tuples_by_video["v1"][0].timestamps, (42.0,))
 
 
 def _event(event_id, *, relation="unknown", reference=None):

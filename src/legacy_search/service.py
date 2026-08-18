@@ -2,10 +2,10 @@ from .client import search_queries
 from .utils import cluster_videos
 from itertools import count
 from .schemas import ClusteredCandidate
+import csv
 import json
 from .searchers.temporal import TemporalSearcher
 from .searchers.ambiguous import AmbiguousSearcher
-import pandas as pd
 from json import JSONDecodeError
 
 from .constants import MAP_KEYFRAMES_CSV_PATH, OBJECT_DETECTIONS_JSON_PATH
@@ -16,18 +16,34 @@ from adaptive_search.dependencies import boundary_refinement_runtime
 from adaptive_search.exceptions import UpstreamSearchError
 from adaptive_search.providers import VideoAssetNotFoundError
 
+
+def _load_frame_index_map(video_name: str) -> dict[int, int]:
+    """frame_idx -> n (the CSV's own 1-indexed row/keyframe number, the key
+    the shipped per-frame detection JSON files are named after). First
+    occurrence wins on a duplicate frame_idx, matching the pandas
+    `.iloc[0]`-on-first-match behavior this replaced."""
+
+    path = MAP_KEYFRAMES_CSV_PATH.format(video_name=video_name)
+    mapping: dict[int, int] = {}
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            frame_idx = int(row["frame_idx"])
+            if frame_idx not in mapping:
+                mapping[frame_idx] = int(row["n"])
+    return mapping
+
+
 def check_object_satisfaction(clustered_videos, object_name_list, objectThreshold):
     required_object_names = set(object_name_list or [])
     for video in clustered_videos:
         video_name = video.video_name[:-4]  # Remove .mp4 extension
-        map_frame_id_file = pd.read_csv(MAP_KEYFRAMES_CSV_PATH.format(video_name=video_name))
+        frame_index_map = _load_frame_index_map(video_name)
         for result in video.results:
-            matching_rows = map_frame_id_file[map_frame_id_file['frame_idx'] == result.frame_index]
-            if matching_rows.empty:
+            index = frame_index_map.get(result.frame_index)
+            if index is None:
                 result.satisfiedObjects = False
                 continue
 
-            index = matching_rows.index[0]
             object_file_path = OBJECT_DETECTIONS_JSON_PATH.format(video_name=video_name, index=index)
 
             try:

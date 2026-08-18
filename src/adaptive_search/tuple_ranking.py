@@ -8,7 +8,7 @@ assemble same-video combinations across events (bounded backtracking - see
 region score plus a confidence-gated bonus/penalty for whether its per-event
 timestamps land in the expected order.
 
-Ported from `irrelevant_things/benchmarks/youcook2/region_tuple_ranking.py`,
+Ported from `research_tools/benchmarks/youcook2/region_tuple_ranking.py`,
 validated there against real YouCook2 queries (n=30/n=60,
 `region_tuple_ranking_results.md`): +15% final_query_score over
 `prioritize_videos()` at this module's default hyperparameters, with two
@@ -25,11 +25,13 @@ theoretically nicer.
 
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass
+from itertools import count
 from statistics import fmean
 from typing import Mapping, Sequence
 
-from .algorithms import _region_allowed
+from .algorithms import _region_allowed, adjacent_hinge_penalty
 from .schemas import EventDefinition, SearchConstraints, SparseCandidate, TemporalRegion, TupleRankingHyperparameters
 
 
@@ -168,6 +170,72 @@ def _order_score(
     return (2 * correct - len(pairs)) / len(pairs)
 
 
+def _adjacent_gap_penalty_or_rejection(
+    event_ids: Sequence[str],
+    timestamps: Sequence[float | None],
+    constraints: SearchConstraints | None,
+) -> tuple[bool, float]:
+    """`(hard_reject, mean_soft_penalty)` for `constraints.adjacent_gap_constraints`,
+    checked over pairs positionally adjacent in `event_ids` - what
+    "adjacent" means for this constraint type (a constraint's
+    `before_event_id`/`after_event_id` only takes effect when those two
+    events also happen to be list-adjacent), the same convention the
+    retired proposal-based `assemble_ordered_tuples` mechanism used before
+    it was removed. A pair with either side uncovered (`None` timestamp)
+    imposes no gap check, matching `_order_score`'s existing "an uncovered
+    event drops any constraint touching it" convention. `min_gap_seconds`/
+    `max_gap_seconds` are hard bounds (violating either rejects the whole
+    combination); `gap_lambda` (when set) additionally applies
+    `adjacent_hinge_penalty` as a soft, mean-pooled penalty subtracted from
+    the combination's score - never negative by the time it reaches that
+    call, since any gap small enough to be negative is already caught by
+    `min_gap_seconds >= 0`."""
+
+    if constraints is None or not constraints.adjacent_gap_constraints:
+        return False, 0.0
+    gap_map = {
+        (c.before_event_id, c.after_event_id): c
+        for c in constraints.adjacent_gap_constraints
+    }
+    penalties: list[float] = []
+    for i in range(len(event_ids) - 1):
+        before, after = timestamps[i], timestamps[i + 1]
+        if before is None or after is None:
+            continue
+        constraint = gap_map.get((event_ids[i], event_ids[i + 1]))
+        if constraint is None:
+            continue
+        gap = after - before
+        if gap < constraint.min_gap_seconds:
+            return True, 0.0
+        if constraint.max_gap_seconds is not None and gap > constraint.max_gap_seconds:
+            return True, 0.0
+        if constraint.gap_lambda is not None:
+            tau = constraint.hinge_tau_seconds if constraint.hinge_tau_seconds is not None else 0.0
+            penalties.append(adjacent_hinge_penalty(gap, tau_seconds=tau, gap_lambda=constraint.gap_lambda))
+    return False, (fmean(penalties) if penalties else 0.0)
+
+
+def _tuple_span_violation(
+    timestamps: Sequence[float | None],
+    constraints: SearchConstraints | None,
+) -> bool:
+    """True if the combination's covered timestamps span more than
+    `constraints.max_tuple_span_seconds`. Uses min/max over covered
+    (non-`None`) timestamps rather than the retired `assemble_ordered_tuples`
+    mechanism's first-minus-last convention, since that convention assumed
+    every event was covered - not true here, where an uncovered event
+    zero-fills instead of eliminating the video (see module-level zero-fill
+    note)."""
+
+    if constraints is None or constraints.max_tuple_span_seconds is None:
+        return False
+    covered = [t for t in timestamps if t is not None]
+    if len(covered) < 2:
+        return False
+    return max(covered) - min(covered) > constraints.max_tuple_span_seconds
+
+
 def assemble_region_tuples_for_video(
     video_id: str,
     event_ids: Sequence[str],
@@ -175,16 +243,41 @@ def assemble_region_tuples_for_video(
     candidates_by_id: Mapping[str, SparseCandidate],
     params: TupleRankingHyperparameters,
     order_constraints: Sequence[tuple[int, int]] | None = None,
+    constraints: SearchConstraints | None = None,
 ) -> list[TupleRankingResult]:
     """All (bounded) same-video region combinations, one region per event,
-    scored by mean region score plus a confidence-gated order-agreement bonus.
+    scored by mean region score plus a confidence-gated order-agreement
+    bonus, minus any soft adjacent-gap penalty (`constraints`).
+
+    Explored best-first via branch-and-bound over an admissible upper bound
+    on each partial assignment's best possible completion (own achieved
+    score, plus every remaining event's own best-pool score, plus the
+    maximum possible order-agreement bonus - ignoring any eventual gap
+    penalty, which can only lower a completion's true score and so never
+    invalidates the bound), not by lexicographic enumeration. This
+    guarantees the up-to-`max_tuples_per_video` results returned are the
+    true best found, not an artifact of enumeration order:
+    `max_combinations_per_video` bounds total search-node expansions, and if
+    that cap is hit before finding enough valid (non-rejected) complete
+    combinations, everything already found is still provably at least as
+    good as anything left unexplored - never a low-scoring combination
+    standing in for a much better one that entered the search space too
+    late to be reached, which naive lexicographic truncation could not
+    guarantee.
+
+    A combination whose covered timestamps violate `constraints.
+    max_tuple_span_seconds` or a hard `adjacent_gap_constraints` bound is
+    rejected outright (not scored, not counted toward
+    `max_tuples_per_video`) but does not stop the search - only that one
+    leaf is skipped.
 
     An event with zero surviving regions in this video is not fatal to the
     whole video (matching `prioritize_videos()`'s zero-fill semantics for an
     uncovered event): it contributes a fixed 0.0 to the mean and is skipped
-    when checking order, rather than eliminating the video from tuple
-    ranking entirely. A video with zero covered events in total still yields
-    no tuples, same as `prioritize_videos()` never ranking it at all.
+    when checking order or gap constraints, rather than eliminating the
+    video from tuple ranking entirely. A video with zero covered events in
+    total still yields no tuples, same as `prioritize_videos()` never
+    ranking it at all.
     """
 
     pools: list[list[TemporalRegion | None]] = []
@@ -194,51 +287,104 @@ def assemble_region_tuples_for_video(
     if all(pool == [None] for pool in pools):
         return []
 
+    n = len(event_ids)
+    pool_best_score = [
+        (pools[i][0].normalized_coarse_score or 0.0) if pools[i][0] is not None else 0.0
+        for i in range(n)
+    ]
+    remaining_best_sum = [0.0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        remaining_best_sum[i] = remaining_best_sum[i + 1] + pool_best_score[i]
+    max_order_bonus = params.order_weight
+
+    def upper_bound(achieved_sum: float, next_index: int) -> float:
+        return (achieved_sum + remaining_best_sum[next_index]) / n + max_order_bonus
+
+    def finalize(selected: tuple[TemporalRegion | None, ...]) -> TupleRankingResult | None:
+        timestamps = tuple(
+            _region_timestamp(region, candidates_by_id) if region is not None else None
+            for region in selected
+        )
+        if _tuple_span_violation(timestamps, constraints):
+            return None
+        rejected, gap_penalty = _adjacent_gap_penalty_or_rejection(event_ids, timestamps, constraints)
+        if rejected:
+            return None
+        scores = [region.normalized_coarse_score or 0.0 if region is not None else 0.0 for region in selected]
+        region_mean = fmean(scores)
+        margins = [
+            _region_margin(region, pools[i]) if region is not None else 0.0
+            for i, region in enumerate(selected)
+        ]
+        margin_mean = fmean(margins)
+        order = _order_score(timestamps, order_constraints)
+        confidence_value = margin_mean if params.confidence_gate == "margin" else region_mean
+        final = region_mean + _effective_order_weight(params, confidence_value) * order - gap_penalty
+        return TupleRankingResult(
+            video_id=video_id,
+            score=final,
+            region_mean_score=region_mean,
+            margin_score=margin_mean,
+            order_score=order,
+            region_ids=tuple(region.id if region is not None else None for region in selected),
+            timestamps=timestamps,
+            region_scores=tuple(scores),
+        )
+
+    # Heap entries: (-priority, tie_breaker, is_partial, payload).
+    #
+    # A *partial* entry's payload is (achieved_sum, selected-so-far) and its
+    # priority is the still-optimistic upper_bound(). A *complete* entry's
+    # payload is its already-finalized TupleRankingResult and its priority
+    # is that result's own exact score - critically NOT upper_bound() again,
+    # which would keep adding the optimistic max_order_bonus even though
+    # the order term (and any gap penalty) is now fully known, no longer
+    # uncertain. Without this distinction every completed leaf would look
+    # equally attractive from the order-bonus's perspective regardless of
+    # whether it actually satisfied the order constraint, defeating the
+    # point of best-first search for exactly the order-term-driven case
+    # this rewrite exists to get right - the search would still expand in a
+    # roughly region-mean-only order, only discovering a genuinely
+    # order-satisfying but lower-region-mean combination after separately
+    # exhausting every higher-region-mean, order-violating alternative
+    # first. Finalizing eagerly at push time (not at pop time) is what
+    # makes this possible: a gap/span-violating combination is pruned right
+    # here and never even enters the heap.
+    tie_breaker = count()
+    heap: list[tuple[float, int, bool, object]] = []
+
+    def push(achieved_sum: float, index: int, selected: tuple[TemporalRegion | None, ...]) -> None:
+        if index < n:
+            heapq.heappush(
+                heap,
+                (-upper_bound(achieved_sum, index), next(tie_breaker), True, (achieved_sum, selected)),
+            )
+            return
+        candidate = finalize(selected)
+        if candidate is None:
+            return  # gap/span violation - pruned, never enters the heap
+        heapq.heappush(heap, (-candidate.score, next(tie_breaker), False, candidate))
+
+    push(0.0, 0, ())
+
     results: list[TupleRankingResult] = []
-    selected: list[TemporalRegion | None] = []
-    combinations_seen = 0
-
-    def backtrack(index: int) -> None:
-        nonlocal combinations_seen
-        if combinations_seen >= params.max_combinations_per_video:
-            return
-        if index == len(event_ids):
-            combinations_seen += 1
-            timestamps = tuple(
-                _region_timestamp(region, candidates_by_id) if region is not None else None
-                for region in selected
-            )
-            scores = [region.normalized_coarse_score or 0.0 if region is not None else 0.0 for region in selected]
-            region_mean = fmean(scores)
-            margins = [
-                _region_margin(region, pools[i]) if region is not None else 0.0
-                for i, region in enumerate(selected)
-            ]
-            margin_mean = fmean(margins)
-            order = _order_score(timestamps, order_constraints)
-            confidence_value = margin_mean if params.confidence_gate == "margin" else region_mean
-            final = region_mean + _effective_order_weight(params, confidence_value) * order
-            results.append(
-                TupleRankingResult(
-                    video_id=video_id,
-                    score=final,
-                    region_mean_score=region_mean,
-                    margin_score=margin_mean,
-                    order_score=order,
-                    region_ids=tuple(region.id if region is not None else None for region in selected),
-                    timestamps=timestamps,
-                    region_scores=tuple(scores),
-                )
-            )
-            return
+    expansions = 0
+    while heap:
+        if len(results) >= params.max_tuples_per_video:
+            break
+        if expansions >= params.max_combinations_per_video:
+            break
+        expansions += 1
+        _, _, is_partial, payload = heapq.heappop(heap)
+        if not is_partial:
+            results.append(payload)  # already a finalized TupleRankingResult
+            continue
+        achieved_sum, selected = payload
+        index = len(selected)
         for region in pools[index]:
-            if combinations_seen >= params.max_combinations_per_video:
-                return
-            selected.append(region)
-            backtrack(index + 1)
-            selected.pop()
+            region_score = (region.normalized_coarse_score or 0.0) if region is not None else 0.0
+            push(achieved_sum + region_score, index + 1, selected + (region,))
 
-    backtrack(0)
     results.sort(key=lambda item: (-item.score, item.region_ids))
     return results[: params.max_tuples_per_video]
 
@@ -253,8 +399,7 @@ def rank_videos_by_region_tuples(
 ) -> tuple[list[tuple[str, float]], dict[str, list[TupleRankingResult]]]:
     """Videos ranked by pooled tuple score (raw, not yet normalized to
     [0,1] - callers writing this into a `UnitScore` field should
-    `algorithms.robust_sigmoid()` the scores first, same as
-    `assemble_ordered_tuples()` already does for its own raw scores), plus
+    `algorithms.robust_sigmoid()` the scores first), plus
     each video's kept tuples (so a caller can also read off the winning
     tuple's per-event anchors for e.g. seeding boundary refinement).
 
@@ -269,16 +414,32 @@ def rank_videos_by_region_tuples(
     list), but a rejected *region* or an unmet `fixed_region_id` pin inside
     an otherwise-valid video was not honored - confirmed by grep, not
     assumption: this module had no reference to `SearchConstraints` or
-    `_region_allowed` at all until this fix."""
+    `_region_allowed` at all until this fix.
+
+    An `EventConstraint` whose `fixed_video_id` + `fixed_timestamp_seconds`
+    name an exact frame with no corresponding region (`commands/fix-frame`
+    on an arbitrary timestamp, not a pinned existing region) is synthesized
+    into a real region before filtering (`_synthetic_fixed_regions`) -
+    without this, a user-confirmed frame had no region for pooling to ever
+    select, so it was silently ignored by ranking regardless of
+    `fixed_video_id`/`fixed_timestamp_seconds` being set. `adjacent_gap_
+    constraints` and `max_tuple_span_seconds` are enforced per combination
+    inside `assemble_region_tuples_for_video` itself - the retired
+    proposal-based `assemble_ordered_tuples` mechanism enforced the same two
+    constraint types for its own (separate) dense per-frame tuple assembly,
+    but its output had no HTTP reader and nothing internal ever consulted
+    it beyond a bare count, so it was removed rather than kept as a second,
+    parallel implementation of the same constraints."""
 
     if constraints is not None:
+        regions = [*regions, *_synthetic_fixed_regions(regions, constraints)]
         regions = [region for region in regions if _region_allowed(region, constraints)]
     video_ids = sorted({region.video_id for region in regions})
     video_scores: list[tuple[str, float]] = []
     tuples_by_video: dict[str, list[TupleRankingResult]] = {}
     for video_id in video_ids:
         tuples = assemble_region_tuples_for_video(
-            video_id, event_ids, regions, candidates_by_id, params, order_constraints
+            video_id, event_ids, regions, candidates_by_id, params, order_constraints, constraints
         )
         if not tuples:
             continue
@@ -287,6 +448,76 @@ def rank_videos_by_region_tuples(
         video_scores.append((video_id, score))
     video_scores.sort(key=lambda item: (-item[1], item[0]))
     return video_scores, tuples_by_video
+
+
+def _synthetic_fixed_regions(
+    regions: Sequence[TemporalRegion],
+    constraints: SearchConstraints,
+) -> list[TemporalRegion]:
+    """One zero-width `TemporalRegion` per event whose constraint pins an
+    exact timestamp (`fixed_video_id` + `fixed_timestamp_seconds`, set via
+    `commands/fix-frame`) that doesn't already correspond to a real region.
+
+    `fixed_region_id` is deliberately ignored whenever `fixed_frame_id` is
+    also set - "explicit frame selection is strongest, deliberately ignores
+    a stale fixed-region field" is the same precedence the retired
+    proposal-based mechanism's own `_proposal_allowed` used. This matters in
+    practice, not just for consistency: `service.py::fix_frame()` always
+    populates `fixed_region_id` too, defaulting it to a synthetic
+    `f"user:{event_id}:{video_id}"` placeholder that names no real
+    `TemporalRegion` at all - treating that as a genuine region pin would
+    silently skip synthesis on every real `commands/fix-frame` call, the
+    exact call this function exists to support. `fixed_region_id` is only
+    respected as a real pin (skip synthesis, defer entirely to
+    `_region_allowed`'s own handling) when `fixed_frame_id` is `None` - a
+    constraint that named an existing region without ever naming a frame.
+
+    Scored at the top of `[0,1]` (`normalized_coarse_score=1.0`) since the
+    user has already confirmed this exact frame is correct - it should win
+    pooling on merit, not only by being force-included, and
+    `_region_allowed`'s existing `fixed_video_id` handling (scoped to this
+    region's own event) already rejects every other video's candidates for
+    this event, so a real competing region from a different video cannot
+    accidentally outrank it. `candidate_ids` references a synthetic,
+    deliberately unresolvable ID rather than a real candidate -
+    `_region_timestamp` falls back to the region's own span midpoint (this
+    exact timestamp) whenever none of a region's `candidate_ids` resolve,
+    so the fixed timestamp still comes through correctly without needing a
+    real backing candidate to exist."""
+
+    if not constraints.event_constraints:
+        return []
+    session_id = regions[0].session_id if regions else "fixed"
+    synthetic: list[TemporalRegion] = []
+    for event_id, event_constraint in constraints.event_constraints.items():
+        if event_constraint.fixed_video_id is None or event_constraint.fixed_timestamp_seconds is None:
+            continue
+        if event_constraint.fixed_frame_id is None and event_constraint.fixed_region_id is not None:
+            continue  # a genuine "pin this existing region" constraint - _region_allowed handles it
+        timestamp = event_constraint.fixed_timestamp_seconds
+        already_covered = any(
+            region.event_id == event_id
+            and region.video_id == event_constraint.fixed_video_id
+            and region.start_seconds <= timestamp <= region.end_seconds
+            for region in regions
+        )
+        if already_covered:
+            continue
+        placeholder_id = f"fixed:{event_id}:{event_constraint.fixed_video_id}"
+        synthetic.append(
+            TemporalRegion(
+                id=placeholder_id,
+                session_id=session_id,
+                event_id=event_id,
+                video_id=event_constraint.fixed_video_id,
+                start_seconds=timestamp,
+                end_seconds=timestamp,
+                candidate_ids=(placeholder_id,),
+                raw_coarse_score=1.0,
+                normalized_coarse_score=1.0,
+            )
+        )
+    return synthetic
 
 
 def build_order_constraints(

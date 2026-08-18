@@ -10,7 +10,7 @@ an unrelated secondary one), keep whichever regions are within
 return every candidate timestamp belonging to those surviving regions as a
 seed, best-score-first, capped at `MAX_SEEDS_PER_EVENT`.
 
-Ported from `irrelevant_things/benchmarks/youcook2/coarse_anchor.py`,
+Ported from `research_tools/benchmarks/youcook2/coarse_anchor.py`,
 validated there against real YouCook2 queries this session -
 `SCORE_THRESHOLD_RATIO`/`MAX_REGIONS_PER_EVENT`/`MAX_SEEDS_PER_EVENT` are
 unchanged, tuned there, not re-derived here. The one real difference: this

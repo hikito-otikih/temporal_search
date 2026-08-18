@@ -132,10 +132,6 @@ def _balanced_preset() -> dict[str, Any]:
             "max_regions_per_event_per_video": 3,
             "max_total_regions": 60,
             "exploration_region_ratio": 0.15,
-            "max_frames_per_run": 2000,
-            "medium_interval_seconds": 0.5,
-            "dense_interval_seconds": 0.1,
-            "dense_radius_seconds": 1.0,
             "video_coverage_weight": 0.5,
             "video_mean_weight": 0.3,
             "video_min_weight": 0.2,
@@ -157,18 +153,6 @@ def _balanced_preset() -> dict[str, Any]:
             "nms_radius_seconds": 0.5,
             "max_proposals_per_region": 5,
         },
-        "ranking": {
-            "top_k": 20,
-            "gap_policy": "hinge",
-            "default_gap_tau_seconds": 10.0,
-            "gap_lambda": 0.01,
-            "fixed_constraint_bonus": 0.02,
-            "require_strict_order": True,
-            "max_proposals_per_event_per_video": 8,
-            "max_combinations_per_video": 10000,
-            "max_tuples_per_video": 200,
-            "max_total_tuples": 2000,
-        },
     }
 
 
@@ -183,7 +167,6 @@ def _paper_full_preset() -> dict[str, Any]:
     preset = _quality_preset()
     preset["retrieval"]["top_n_per_variant"] = 100
     preset["retrieval"]["top_n_fused"] = 200
-    preset["ranking"]["max_combinations_per_video"] = 50000
     return preset
 
 

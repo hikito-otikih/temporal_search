@@ -243,17 +243,6 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         help="hyperparameters.refinement.max_regions_per_event_per_video for adaptive_full's frontier. No effect on adaptive_coarse.",
     )
     tuple_run.add_argument(
-        "--adaptive-max-frames-per-run",
-        type=int,
-        default=defaults.get("adaptive_max_frames_per_run"),
-        help=(
-            "hyperparameters.refinement.max_frames_per_run - the session's own "
-            "hard ceiling that --adaptive-max-frames (commands/refine's request) "
-            "is not allowed to exceed. Raise this alongside --adaptive-max-frames, "
-            "not instead of it - they are different knobs."
-        ),
-    )
-    tuple_run.add_argument(
         "--recall-k", type=_csv_ints, default=_csv_ints(defaults.get("recall_k", "1,5,10,20,50"))
     )
     tuple_run.add_argument("--output-dir", default=defaults.get("output_dir"))
@@ -389,7 +378,6 @@ def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         adaptive_max_initial_videos=args.adaptive_max_initial_videos,
         adaptive_max_total_regions=args.adaptive_max_total_regions,
         adaptive_max_regions_per_event_per_video=args.adaptive_max_regions_per_event,
-        adaptive_max_frames_per_run=args.adaptive_max_frames_per_run,
     )
     metrics, _ = run_tuple_benchmark(
         groups=groups,

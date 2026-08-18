@@ -1,9 +1,7 @@
 import unittest
 
 from adaptive_search.algorithms import (
-    assemble_ordered_tuples,
     calibrate_frame_scores,
-    cluster_temporal_regions,
     generate_boundary_proposals,
     prioritize_videos,
     select_refinement_frontier,
@@ -11,14 +9,9 @@ from adaptive_search.algorithms import (
 )
 from adaptive_search.schemas import (
     BoundaryHyperparameters,
-    ClusteringHyperparameters,
-    EventConstraint,
-    EventDefinition,
     EventProposal,
     FrameScoreSample,
-    RankingHyperparameters,
     RefinementHyperparameters,
-    SearchConstraints,
     SparseCandidate,
     TemporalRegion,
 )
@@ -73,22 +66,6 @@ def proposal(proposal_id, event_id, timestamp, score, *, frame_id=None):
 
 
 class AdaptiveAlgorithmTests(unittest.TestCase):
-    def test_region_clustering_uses_seconds_and_merges_expanded_overlap(self):
-        regions = cluster_temporal_regions(
-            [
-                candidate("c1", "e1", "video", 1.0),
-                candidate("c2", "e1", "video", 5.0),
-                candidate("c3", "e1", "video", 12.0),
-            ],
-            ClusteringHyperparameters(gap_seconds=3.0, margin_seconds=2.0),
-        )
-
-        self.assertEqual(len(regions), 2)
-        self.assertEqual(regions[0].start_seconds, 0.0)
-        self.assertEqual(regions[0].end_seconds, 7.0)
-        self.assertEqual(regions[0].candidate_ids, ("c1", "c2"))
-        self.assertEqual(regions[1].start_seconds, 10.0)
-
     def test_calibration_preserves_raw_scores_and_pairs_pre_post(self):
         samples = [frame_sample("e1", "r1", value) for value in range(5)]
         calibrated = calibrate_frame_scores(samples)
@@ -281,47 +258,6 @@ class AdaptiveAlgorithmTests(unittest.TestCase):
         ]
         priorities = prioritize_videos(regions, ["e1", "e2"])
         self.assertEqual(priorities[0].distinctness, 1.0)
-
-    def test_tuple_assembly_enforces_order_hard_constraint_and_gap_penalty(self):
-        events = [
-            EventDefinition(
-                event_id="e1", original_query="one", anchor_query="one"
-            ),
-            EventDefinition(
-                event_id="e2", original_query="two", anchor_query="two"
-            ),
-        ]
-        proposals = [
-            proposal("e1-good", "e1", 1.0, 0.8, frame_id=10),
-            proposal("e1-late", "e1", 5.0, 0.95, frame_id=50),
-            proposal("e2-good", "e2", 3.0, 0.9, frame_id=30),
-        ]
-        constraints = SearchConstraints(
-            event_constraints={
-                "e1": EventConstraint(fixed_frame_id=10),
-            }
-        )
-        ranking = RankingHyperparameters(
-            top_k=10,
-            default_gap_tau_seconds=1.0,
-            gap_lambda=0.1,
-            fixed_constraint_bonus=0.0,
-        )
-
-        results = assemble_ordered_tuples(
-            events,
-            proposals,
-            constraints,
-            ranking,
-        )
-
-        self.assertEqual(len(results), 1)
-        self.assertEqual(
-            [item.id for item in results[0].proposals],
-            ["e1-good", "e2-good"],
-        )
-        self.assertEqual(results[0].adjacent_gaps_seconds, (2.0,))
-        self.assertAlmostEqual(results[0].raw_gap_penalty, 0.1)
 
 
 if __name__ == "__main__":

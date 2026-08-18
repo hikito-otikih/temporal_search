@@ -26,11 +26,17 @@ Available strategies:
 ## Adaptive temporal search
 
 Call `GET /v1/searchers` to discover the legacy and adaptive contracts. The
-adaptive workflow uses `POST /v1/search-sessions`, ingests sparse candidates,
-then either calls `POST .../commands/refine` or ingests precomputed frame-level
-anchor/pre/post scores. It supports deterministic RRF fusion, temporal regions,
-budgeted refinement, boundary profiles, temporal NMS, hard constraints,
-optimistic revisions, and bounded same-video tuple assembly.
+adaptive workflow uses `POST /v1/search-sessions`, ingests sparse candidates
+via `POST .../artifacts/candidates`, and ranks videos with order-aware tuple
+ranking via `GET .../video-priorities` (optionally requesting native-FPS
+boundary refinement). Precomputed frame-level anchor/pre/post scores can be
+ingested via `POST .../artifacts/frame-scores` to drive the separate
+dense-refinement/proposal pipeline. `commands/refine` and the `GET .../tuples`
+endpoint have been removed - see
+[docs/ADAPTIVE_PIPELINE_MIGRATION.md](docs/ADAPTIVE_PIPELINE_MIGRATION.md) for
+what replaced them. The system supports deterministic RRF fusion, temporal
+regions, budgeted refinement, boundary profiles, temporal NMS, hard
+constraints, optimistic revisions, and bounded same-video tuple assembly.
 
 The local `YouCook2FrameProvider` uses PyAV and actual presentation timestamps;
 catalog discovery over 1,660 videos and a real frame decode have been verified.
@@ -51,7 +57,7 @@ verified in this workspace. The optional Qwen3-VL embedding/reranker profile is
 specified but still has no executed runtime.
 
 Optional local refinement setup is documented in `.env.example` and
-`requirements-live-refinement.txt`. At minimum configure `YOUCOOK2_DATA_ROOT`
+`requirements/live-refinement.txt`. At minimum configure `YOUCOOK2_DATA_ROOT`
 and a pinned SigLIP2 revision before starting the API.
 
 `GET /v1/searchers` exposes the complete active `runtime_model_spec`. When a
@@ -61,7 +67,7 @@ rewritten. The ordered-frame reranker and motion scorer are not implemented,
 so `use_reranker=true` is rejected and live runs report
 `motion_scores_available=false`.
 
-The self-contained [YouCook2 benchmark](irrelevant_things/benchmarks/youcook2/README.md) queries
+The self-contained [YouCook2 benchmark](research_tools/benchmarks/youcook2/README.md) queries
 `http://127.0.0.1:8000/search` and measures corpus Video Recall@K without sending
 ground truth to the backend. Current saved runs are smoke/pilot runs only; they
 are not full validation or temporal-boundary results.
@@ -73,7 +79,7 @@ and paper evaluation guidance.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.11 or newer (matches `pyproject.toml`'s `requires-python`)
 - An upstream frame-search API running at `http://127.0.0.1:8000/search`
 
 Install the Python dependencies in a virtual environment:
@@ -81,7 +87,16 @@ Install the Python dependencies in a virtual environment:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install -e .
+```
+
+This installs the runtime dependencies pinned in `requirements/base.txt`
+(referenced automatically via `pyproject.toml`'s dynamic dependencies).
+For optional local boundary-refinement support, additionally install
+`requirements/live-refinement.txt`:
+
+```bash
+python -m pip install -r requirements/live-refinement.txt
 ```
 
 On Windows PowerShell, activate the environment with:
@@ -194,6 +209,9 @@ Illustrative response (exact wording depends on the configured model):
       "subject": "con lân màu vàng, đen và trắng",
       "action": "bắt đầu xoay vòng trên cột số 4 bằng hai chân trước",
       "visible_state": "hai chân trước của lân ở trên cột số 4 và cơ thể vừa bắt đầu chuyển động xoay",
+      "anchor_query": "Con lân màu vàng, đen và trắng bắt đầu xoay vòng trên cột số 4 bằng hai chân trước trong màn múa lân.",
+      "pre_state": "Ngay trước đó, lân đứng yên trên cột số 4, chưa bắt đầu xoay vòng.",
+      "post_state": "Ngay sau đó, lân đang xoay vòng trên cột số 4 bằng hai chân trước.",
       "boundary": "start",
       "temporal_relation": {
         "relation": "sequence_start",
@@ -208,6 +226,43 @@ Illustrative response (exact wording depends on the configured model):
       ],
       "excluded_context": [
         "khoảnh khắc lân đã tiếp đất"
+      ],
+      "inferred_information": [
+        "Màu sắc của con lân được lấy từ common_query."
+      ],
+      "ambiguities": []
+    },
+    {
+      "event_id": 1,
+      "original_query": "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên.",
+      "target_moment_vi": "Trong màn múa lân, khoảnh khắc đầu tiên con lân màu vàng, đen và trắng có cả bốn chân hoàn toàn chạm đất sau khi xoay vòng trên cột số 4.",
+      "retrieval_queries_vi": [
+        "Khoảnh khắc con lân màu vàng, đen và trắng có bốn chân hoàn toàn chạm đất lần đầu.",
+        "Con lân vàng, đen và trắng vừa tiếp đất hoàn toàn bằng cả bốn chân trong màn múa lân."
+      ],
+      "retrieval_queries_en": [
+        "The first moment the yellow, black, and white lion lands with all four feet fully on the ground.",
+        "The yellow, black, and white lion fully touching down with all four feet during the lion dance."
+      ],
+      "subject": "con lân màu vàng, đen và trắng",
+      "action": "tiếp đất hoàn toàn bằng cả bốn chân",
+      "visible_state": "cả bốn chân của lân đang chạm đất",
+      "anchor_query": "Con lân màu vàng, đen và trắng có cả bốn chân hoàn toàn chạm đất trong màn múa lân.",
+      "pre_state": "Ngay trước đó, lân vẫn đang ở trên không hoặc chỉ một phần chân chạm đất.",
+      "post_state": "Ngay sau đó, cả bốn chân của lân đã chạm đất hoàn toàn.",
+      "boundary": "end",
+      "temporal_relation": {
+        "relation": "after",
+        "reference_event_id": 0
+      },
+      "required_entities": [
+        "con lân màu vàng, đen và trắng"
+      ],
+      "soft_context": [
+        "màn múa lân"
+      ],
+      "excluded_context": [
+        "khoảnh khắc lân bắt đầu xoay vòng"
       ],
       "inferred_information": [
         "Màu sắc của con lân được lấy từ common_query."
@@ -368,19 +423,19 @@ results = temporal_search(
 
 ## Streamlit UI
 
-A research/debug console lives in `irrelevant_things/streamlit_ui/`. It talks only to the FastAPI
-backend through a typed client (`irrelevant_things/streamlit_ui/services/api_client.py`) and
+A research/debug console lives in `research_tools/streamlit_ui/`. It talks only to the FastAPI
+backend through a typed client (`research_tools/streamlit_ui/services/api_client.py`) and
 never reimplements clustering/scoring.
 
 ```bash
 # Install UI dependencies (streamlit, plotly) into the same venv
-.venv/bin/python -m pip install -r irrelevant_things/streamlit_ui/requirements.txt
+.venv/bin/python -m pip install -r research_tools/streamlit_ui/requirements.txt
 
 # Optional configuration
-cp irrelevant_things/streamlit_ui/.env.example irrelevant_things/streamlit_ui/.env
+cp research_tools/streamlit_ui/.env.example research_tools/streamlit_ui/.env
 
 # Run the console (backend on :8001 must be running)
-.venv/bin/python -m streamlit run irrelevant_things/streamlit_ui/Home.py
+.venv/bin/python -m streamlit run research_tools/streamlit_ui/Home.py
 ```
 
 Pages:
@@ -410,7 +465,7 @@ Design notes:
 - Run the UI tests with:
 
 ```bash
-.venv/bin/python -m unittest discover -s irrelevant_things/streamlit_ui/tests -p "test_*.py"
+.venv/bin/python -m unittest discover -s research_tools/streamlit_ui/tests -p "test_*.py"
 ```
 
 ## Project layout
@@ -424,5 +479,5 @@ src/
 └── legacy_search/           Pre-adaptive pipeline: router, schemas, service, searchers/
 data/                        Sample results and optional object metadata
 docs/                        Revised plan and adaptive technical specification
-irrelevant_things/           Streamlit debug console and benchmark tooling (dev-only)
+research_tools/           Streamlit debug console and benchmark tooling (dev-only)
 ```

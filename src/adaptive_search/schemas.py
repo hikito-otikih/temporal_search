@@ -20,8 +20,6 @@ PositiveFloat = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
 Seconds = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
 PositiveInt = Annotated[int, Field(gt=0)]
 NonNegativeInt = Annotated[int, Field(ge=0)]
-FrameRunBudget = Annotated[int, Field(gt=0, le=100_000)]
-EmbeddingBatchSize = Annotated[int, Field(gt=0, le=512)]
 
 
 BoundaryType = Literal[
@@ -112,7 +110,7 @@ def _quality_reranker_model() -> ModelRuntimeSpec:
 
 class RetrievalHyperparameters(StrictModel):
     # top_n_per_variant/top_n_fused: winner config from the youcook2 benchmark's
-    # hyperparameter sweep (irrelevant_things/benchmarks/youcook2/hyperparameter_sweep_results.md) -
+    # hyperparameter sweep (research_tools/benchmarks/youcook2/hyperparameter_sweep_results.md) -
     # wide retrieval measurably improved adaptive_coarse recall over the previous
     # narrower defaults with no downside found.
     top_n_per_variant: PositiveInt = 500
@@ -136,7 +134,10 @@ class ClusteringHyperparameters(StrictModel):
 
 
 class RefinementHyperparameters(StrictModel):
-    """Budget, sampling, and fully fingerprintable inference configuration."""
+    """Frontier budget, video-priority blend weights, and fully
+    fingerprintable inference configuration. Dense/medium sampling-interval
+    fields were removed with `commands/refine` (the dense orchestrator that
+    was their only consumer) - see `docs/ADAPTIVE_PIPELINE_MIGRATION.md`."""
 
     embedding_model: ModelRuntimeSpec = Field(
         default_factory=_runtime_embedding_model
@@ -154,11 +155,6 @@ class RefinementHyperparameters(StrictModel):
     max_regions_per_event_per_video: PositiveInt = 5
     max_total_regions: PositiveInt = 400
     exploration_region_ratio: UnitScore = 0.15
-    max_frames_per_run: FrameRunBudget = 12000
-    embedding_batch_size: EmbeddingBatchSize = 64
-    medium_interval_seconds: PositiveFloat = 0.5
-    dense_interval_seconds: PositiveFloat = 0.1
-    dense_radius_seconds: PositiveFloat = 1.0
 
     # Winner config from the same hyperparameter sweep: mean-only ranking beat
     # every blend that included coverage or min once retrieval is wide (see
@@ -179,10 +175,6 @@ class RefinementHyperparameters(StrictModel):
 
     @model_validator(mode="after")
     def validate_refinement_configuration(self) -> "RefinementHyperparameters":
-        if self.dense_interval_seconds > self.medium_interval_seconds:
-            raise ValueError(
-                "dense_interval_seconds must be <= medium_interval_seconds"
-            )
         if self.quality_profile_enabled and self.quality_embedding_model is None:
             raise ValueError(
                 "quality_embedding_model is required when quality_profile_enabled"
@@ -257,26 +249,6 @@ class BoundaryHyperparameters(StrictModel):
         return self
 
 
-class RankingHyperparameters(StrictModel):
-    top_k: PositiveInt = 20
-    gap_policy: Literal["hinge"] = "hinge"
-    default_gap_tau_seconds: Seconds = 10.0
-    gap_lambda: NonNegativeFloat = 0.01
-    fixed_constraint_bonus: NonNegativeFloat = 0.02
-    require_strict_order: bool = True
-
-    max_proposals_per_event_per_video: PositiveInt = 8
-    max_combinations_per_video: PositiveInt = 10_000
-    max_tuples_per_video: PositiveInt = 200
-    max_total_tuples: PositiveInt = 2_000
-
-    @model_validator(mode="after")
-    def validate_tuple_caps(self) -> "RankingHyperparameters":
-        if self.top_k > self.max_total_tuples:
-            raise ValueError("top_k must be <= max_total_tuples")
-        return self
-
-
 class TupleRankingHyperparameters(StrictModel):
     """Multi-region pooling + order-aware tuple video ranking - the sole
     ranking algorithm behind `GET .../video-priorities`.
@@ -284,7 +256,7 @@ class TupleRankingHyperparameters(StrictModel):
     still tested, but nothing in this endpoint calls it any more.
 
     Validated against real YouCook2 queries, n=60
-    (irrelevant_things/benchmarks/youcook2/region_tuple_ranking_results.md):
+    (research_tools/benchmarks/youcook2/region_tuple_ranking_results.md):
     +12.4% final_query_score over prioritize_videos() (1.2133 -> 1.3633),
     concentrated on the queries prioritize_videos() gets wrong (hard-subset
     MRR +78%). Defaults below are that report's winning, seven-round-
@@ -367,7 +339,6 @@ class SearchHyperparameters(StrictModel):
     boundary: BoundaryHyperparameters = Field(
         default_factory=BoundaryHyperparameters
     )
-    ranking: RankingHyperparameters = Field(default_factory=RankingHyperparameters)
     tuple_ranking: TupleRankingHyperparameters = Field(
         default_factory=TupleRankingHyperparameters
     )
@@ -591,34 +562,3 @@ class VideoPriority(StrictModel):
     priority_score: UnitScore
 
 
-class TupleResult(StrictModel):
-    id: NonEmptyStr
-    video_id: NonEmptyStr
-    proposals: tuple[EventProposal, ...]
-    adjacent_gaps_seconds: tuple[Seconds, ...]
-    adjacent_gap_penalties: tuple[NonNegativeFloat, ...]
-
-    raw_event_mean_score: UnitScore
-    raw_gap_penalty: NonNegativeFloat
-    raw_constraint_bonus: NonNegativeFloat
-    raw_final_score: RawScore
-    normalized_final_score: UnitScore | None = None
-
-    @model_validator(mode="after")
-    def validate_tuple(self) -> "TupleResult":
-        if not self.proposals:
-            raise ValueError("proposals must not be empty")
-        if any(item.video_id != self.video_id for item in self.proposals):
-            raise ValueError("all proposals in a tuple must be from the same video")
-        event_ids = [item.event_id for item in self.proposals]
-        if len(set(event_ids)) != len(event_ids):
-            raise ValueError("a tuple cannot contain an event more than once")
-        timestamps = [item.timestamp_seconds for item in self.proposals]
-        if timestamps != sorted(timestamps):
-            raise ValueError("proposal timestamps must be ordered")
-        expected_gap_count = len(self.proposals) - 1
-        if len(self.adjacent_gaps_seconds) != expected_gap_count:
-            raise ValueError("adjacent_gaps_seconds has the wrong length")
-        if len(self.adjacent_gap_penalties) != expected_gap_count:
-            raise ValueError("adjacent_gap_penalties has the wrong length")
-        return self

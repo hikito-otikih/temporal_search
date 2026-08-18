@@ -100,7 +100,7 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(items[0]["event_coverage"], 2)
         self.assertEqual(items[1]["event_coverage"], 1)
 
-    def test_session_candidate_score_and_tuple_pipeline(self):
+    def test_session_candidate_score_and_hyperparameter_patch_pipeline(self):
         session_id = self.create_session()
         candidates = [
             {
@@ -200,34 +200,100 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         counts = response.json()["artifact_counts"]
         self.assertGreater(counts["proposals"], 0)
-        # bundle.artifacts.tuples still gets populated by artifacts/frame-scores
-        # (assemble_ordered_tuples is intentionally kept - fix_frame also relies
-        # on it - only the GET /tuples HTTP surface was removed alongside
-        # commands/refine), so the count is still checkable; there's just no
-        # remaining HTTP endpoint to read the tuples' own content back.
-        self.assertGreater(counts["tuples"], 0)
 
         response = self.client.patch(
             f"/v1/search-sessions/{session_id}/hyperparameters",
             json={
                 "expected_revision": 0,
-                "patch": {"ranking": {"gap_lambda": 0.02}},
+                "patch": {"tuple_ranking": {"order_weight": 0.5}},
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["session_revision"], 1)
         self.assertEqual(response.json()["invalidated_stages"], ["tuple"])
-        self.assertGreater(response.json()["artifact_counts"]["tuples"], 0)
 
         stale = self.client.patch(
             f"/v1/search-sessions/{session_id}/hyperparameters",
             json={
                 "expected_revision": 0,
-                "patch": {"ranking": {"gap_lambda": 0.03}},
+                "patch": {"tuple_ranking": {"order_weight": 0.6}},
             },
         )
         self.assertEqual(stale.status_code, 409)
         self.assertEqual(stale.json()["detail"]["current_revision"], 1)
+
+    def test_patching_tuple_ranking_hyperparameters_succeeds(self):
+        # tuple_ranking is a separate SearchHyperparameters section from
+        # "ranking" - a real, valid patch to it had no matching invalidation
+        # prefix at all and was rejected with a 422 regardless of how valid
+        # the patch itself was.
+        session_id = self.create_session()
+        self.client.post(
+            f"/v1/search-sessions/{session_id}/artifacts/candidates",
+            json={
+                "expected_revision": 0,
+                "event_ids": ["e1", "e2"],
+                "candidates": [
+                    {
+                        "id": "c1", "session_id": session_id, "event_id": "e1",
+                        "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
+                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                    },
+                ],
+            },
+        )
+        response = self.client.patch(
+            f"/v1/search-sessions/{session_id}/hyperparameters",
+            json={
+                "expected_revision": 0,
+                "patch": {"tuple_ranking": {"order_weight": 0.5}},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["invalidated_stages"], ["tuple"])
+
+    def test_patching_clustering_hyperparameters_does_not_wipe_regions(self):
+        # clustering.* is mapped to stage "region" - a patch used to
+        # silently delete every region in the session (event_ids=None made
+        # the per-event filter reject everything) with no rebuild
+        # afterward: 200 OK, but /video-priorities and /regions were both
+        # broken until a fresh commands/retrieve.
+        session_id = self.create_session()
+        self.client.post(
+            f"/v1/search-sessions/{session_id}/artifacts/candidates",
+            json={
+                "expected_revision": 0,
+                "event_ids": ["e1", "e2"],
+                "candidates": [
+                    {
+                        "id": "c1", "session_id": session_id, "event_id": "e1",
+                        "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
+                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                    },
+                    {
+                        "id": "c2", "session_id": session_id, "event_id": "e2",
+                        "video_id": "video", "frame_id": 60, "timestamp_seconds": 6.0,
+                        "raw_relevance_score": 0.9, "query_variant": "anchor-en-0",
+                    },
+                ],
+            },
+        )
+        response = self.client.patch(
+            f"/v1/search-sessions/{session_id}/hyperparameters",
+            json={
+                "expected_revision": 0,
+                "patch": {"clustering": {"gap_seconds": 5.0}},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["artifact_counts"]["regions"], 2)
+
+        regions_after = self.client.get(f"/v1/search-sessions/{session_id}/regions")
+        self.assertEqual(len(regions_after.json()["items"]), 2)
+
+        priorities_after = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        self.assertEqual(priorities_after.status_code, 200, priorities_after.text)
+        self.assertEqual(len(priorities_after.json()["items"]), 1)
 
     def test_legacy_request_rejects_silent_searcher_fallbacks(self):
         invalid_payloads = (

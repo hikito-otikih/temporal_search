@@ -32,7 +32,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .core import VideoQueryGroup, canonical_video_id
-from adaptive_search.algorithms import cluster_temporal_regions, prioritize_videos
+from .legacy_clustering import cluster_temporal_regions
+from adaptive_search.algorithms import prioritize_videos
 from adaptive_search.client import QueryVariant, UpstreamSearchClient
 from adaptive_search.retrieval import fuse_candidates_rrf
 from adaptive_search.schemas import (

@@ -462,15 +462,6 @@ class TemporalApiClient:
             },
         )
 
-    def get_tuples(
-        self, session_id: str, *, offset: int = 0, limit: int = 20
-    ) -> dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/v1/search-sessions/{session_id}/tuples",
-            params={"offset": offset, "limit": limit},
-        )
-
     def get_frame_scores(
         self,
         session_id: str,

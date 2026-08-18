@@ -59,10 +59,12 @@ class TupleRunConfig:
     timeout_seconds: float
     retries: int
     retry_backoff_seconds: float
-    # commands/refine defaults to the session's full max_frames_per_run budget
-    # (2000) across every candidate video in the frontier - real PyAV decode +
-    # SigLIP2 embedding at that scale can take minutes per session. Cap it for
-    # benchmark turnaround; None keeps the server's own default.
+    # Historical note: this and the adaptive_full/commands/refine path below
+    # predate that endpoint's removal (see docs/ADAPTIVE_PIPELINE_MIGRATION.md)
+    # - commands/refine no longer exists, so this flag has no live server
+    # endpoint to configure any more. Left as-is (out of scope for the
+    # max_frames_per_run/dense-sampling field removal this comment used to
+    # describe) pending a dedicated pass over adaptive_full's benchmark mode.
     adaptive_max_frames: int | None = None
     # Caps the size of whichever ranked list each adaptive stage produces -
     # independent of --adaptive-top-k (the raw per-variant retrieval cap).
@@ -91,10 +93,6 @@ class TupleRunConfig:
     adaptive_max_initial_videos: int | None = None
     adaptive_max_total_regions: int | None = None
     adaptive_max_regions_per_event_per_video: int | None = None
-    # The session-level ceiling commands/refine's own max_frames (above) is
-    # not allowed to exceed - a distinct knob from --adaptive-max-frames,
-    # which is the per-command request, not the session's own hard limit.
-    adaptive_max_frames_per_run: int | None = None
 
 
 def source_fingerprint(source_path: Path) -> tuple[str, int]:
@@ -175,7 +173,6 @@ def _adaptive_hyperparameters(
                 "max_regions_per_event_per_video",
                 config.adaptive_max_regions_per_event_per_video,
             ),
-            ("max_frames_per_run", config.adaptive_max_frames_per_run),
         )
         if value is not None
     }

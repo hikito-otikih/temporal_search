@@ -226,7 +226,7 @@ clustering, down from r@1=0.38/MRR=0.461 with it.
 ## Reproducibility
 
 Coarse baseline / any `adaptive_full` config, run via the extended CLI
-(`irrelevant_things/benchmarks/youcook2/cli.py`, flags added in this session):
+(`research_tools/benchmarks/youcook2/cli.py`, flags added in this session):
 
 ```bash
 python -m benchmarks.youcook2 tuple-run \

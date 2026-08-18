@@ -18,7 +18,6 @@ from .schemas import (
     SearchHyperparameters,
     SparseCandidate,
     TemporalRegion,
-    TupleResult,
 )
 
 
@@ -70,7 +69,6 @@ class ArtifactState(SessionModel):
     frontier_region_ids: list[str] = Field(default_factory=list)
     frame_scores: list[FrameScoreSample] = Field(default_factory=list)
     proposals: list[EventProposal] = Field(default_factory=list)
-    tuples: list[TupleResult] = Field(default_factory=list)
 
 
 class SearchRun(SessionModel):

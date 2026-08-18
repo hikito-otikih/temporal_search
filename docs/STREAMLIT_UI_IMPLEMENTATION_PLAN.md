@@ -1,5 +1,10 @@
 # Kế hoạch triển khai Streamlit UI cho Temporal Search
 
+> **Lưu ý:** `GET .../tuples` được nhắc tới trong tài liệu này **đã bị xoá
+> khỏi router** (xem
+> [`ADAPTIVE_PIPELINE_MIGRATION.md`](ADAPTIVE_PIPELINE_MIGRATION.md)). Ranking
+> hiện đọc qua `GET .../video-priorities`.
+
 ## 1. Mục tiêu
 
 Xây dựng một ứng dụng Streamlit phục vụ ba nhu cầu khác nhau nhưng dùng chung
@@ -340,7 +345,7 @@ read current revision
 | Ingest frame scores | `POST .../artifacts/frame-scores` |
 | List regions | `GET .../regions` |
 | List proposals | `GET .../proposals` |
-| List tuples | `GET .../tuples` |
+| Video priorities (ranking) | `GET .../video-priorities` |
 | Fix frame | adaptive fix-frame endpoint |
 | Reject proposal | adaptive reject-proposal endpoint |
 | Delete session | `DELETE /v1/search-sessions/{id}` |
@@ -515,7 +520,7 @@ Phase này chỉ bắt đầu sau khi YouCook2 Video Recall@K ổn định.
 ### End-to-end scenarios
 
 1. Legacy ordered search hoàn chỉnh.
-2. Adaptive: create -> candidates -> regions -> frame scores -> proposals -> tuples.
+2. Adaptive: create -> candidates -> regions -> video-priorities (ranking) -> frame scores -> proposals.
 3. Chỉnh clustering gap và quan sát invalidation/recompute.
 4. Reject video, fix keyframe, clear constraint.
 5. Backend/frame provider unavailable.

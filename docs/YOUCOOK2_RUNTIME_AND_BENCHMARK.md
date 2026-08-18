@@ -92,15 +92,16 @@ pip install -e .
 python src/main.py
 ```
 
-Luồng:
+Luồng (cập nhật sau khi `commands/refine` và `GET .../tuples` bị xoá - xem
+[`ADAPTIVE_PIPELINE_MIGRATION.md`](ADAPTIVE_PIPELINE_MIGRATION.md)):
 
 ```text
 POST /v1/search-sessions
   -> POST .../artifacts/candidates
   -> GET  .../regions
-  -> POST .../commands/refine
+  -> GET  .../video-priorities
+  -> POST .../artifacts/frame-scores
   -> GET  .../proposals
-  -> GET  .../tuples
   -> GET  .../runs
 ```
 
@@ -152,7 +153,7 @@ không commit frame score.
 
 ## 5. Video Recall@K benchmark
 
-Package: `irrelevant_things/benchmarks/youcook2/`.
+Package: `research_tools/benchmarks/youcook2/`.
 
 Mục tiêu hiện tại chỉ là:
 
@@ -172,7 +173,7 @@ API port 8000 hiện chạy trong Windows network namespace, do đó chạy bằ
 Python là cách trực tiếp nhất:
 
 ```powershell
-cd \\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search\irrelevant_things
+cd \\wsl.localhost\Ubuntu\home\huynhchiton\projects\temporal_search\research_tools
 
 python -m benchmarks.youcook2 health `
   --base-url http://127.0.0.1:8000

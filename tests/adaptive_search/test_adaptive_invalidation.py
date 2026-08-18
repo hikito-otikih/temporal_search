@@ -2,19 +2,18 @@ import unittest
 
 from adaptive_search.invalidation import (
     artifact_fingerprint,
-    changed_paths,
     invalidated_for_event,
     invalidated_for_parameters,
 )
 
 
 class AdaptiveInvalidationTests(unittest.TestCase):
-    def test_ranking_change_invalidates_tuple_only(self):
-        before = {"ranking": {"top_k": 10}, "clustering": {"gap_seconds": 3.0}}
-        after = {"ranking": {"top_k": 20}, "clustering": {"gap_seconds": 3.0}}
-        paths = changed_paths(before, after)
-
-        self.assertEqual(paths, {"ranking.top_k"})
+    def test_tuple_ranking_change_invalidates_tuple_only(self):
+        # A real, valid patch to tuple_ranking (the sole ranking algorithm's
+        # own hyperparameter section) once had no matching prefix at all,
+        # raising an uncaught "no invalidation rule for path" ValueError
+        # that surfaced as a 422 for a semantically valid config change.
+        paths = {"tuple_ranking.order_weight"}
         self.assertEqual(invalidated_for_parameters(paths), ["tuple"])
 
     def test_frontier_budget_change_starts_at_frontier(self):

@@ -1,5 +1,14 @@
 # Adaptive Temporal Search: thiết kế, contract và hướng dẫn tích hợp
 
+> **Endpoint đã lỗi thời:** `POST .../commands/refine` và `GET .../tuples`
+> được nhắc tới nhiều chỗ trong tài liệu này **đã bị xoá khỏi router** (xem
+> [`ADAPTIVE_PIPELINE_MIGRATION.md`](ADAPTIVE_PIPELINE_MIGRATION.md), nguồn
+> đúng nhất cho trạng thái endpoint hiện tại). Video ranking hiện chạy qua
+> `GET .../video-priorities` (order-aware tuple ranking, không còn flag);
+> frame-score ingest vẫn qua `POST .../artifacts/frame-scores`, nhưng
+> tuple/proposal nội bộ nó tạo ra không còn HTTP surface riêng để đọc lại.
+> Phần còn lại của tài liệu chưa được cập nhật lại theo thay đổi này.
+
 Tài liệu này mô tả đúng vertical slice đang có trong repository. Nó là nguồn
 tham chiếu cho frontend, demo ý tưởng và phần phương pháp của paper. Raw-video
 provider và live-refinement orchestration đã có; những model/benchmark chưa chạy
@@ -419,12 +428,16 @@ Không gửi legacy type vào `/v1/search-sessions`; endpoint này chỉ nhận
 | `PUT` | `/v1/search-sessions/{id}/constraints` | Thay toàn bộ typed constraints/gap policy |
 | `POST` | `/v1/search-sessions/{id}/artifacts/candidates` | Ingest candidates, chạy RRF/region/frontier |
 | `POST` | `/v1/search-sessions/{id}/artifacts/frame-scores` | Ingest score curves, tạo proposal/tuple |
-| `POST` | `/v1/search-sessions/{id}/commands/refine` | Decode/sample/score selected regions và commit proposal/tuple đồng bộ |
+| `POST` | `/v1/search-sessions/{id}/commands/retrieve` | Gọi upstream sparse search, fuse RRF, build region/frontier |
 | `POST` | `/v1/search-sessions/{id}/commands/mark-videos` | Đặt video allowlist |
 | `POST` | `/v1/search-sessions/{id}/commands/fix-frame` | Fix mốc event |
 | `POST` | `/v1/search-sessions/{id}/commands/reject-proposal` | Loại proposal |
 | `POST` | `/v1/search-sessions/{id}/commands/clear-event-constraint` | Xóa constraint của event |
-| `GET` | `.../regions`, `.../proposals`, `.../tuples`, `.../runs` | Danh sách phân trang |
+| `GET` | `.../regions`, `.../proposals`, `.../video-priorities`, `.../frame-scores`, `.../runs` | Danh sách/kết quả phân trang |
+| `GET` | `/v1/media/{video_id}/frame-preview` | Frame thật quanh một anchor, phục vụ sửa mốc thủ công |
+
+`POST .../commands/refine` và `GET .../tuples` **đã bị xoá** (xem banner đầu
+tài liệu) - không còn trong bảng trên.
 
 Tạo session tối thiểu:
 
@@ -572,7 +585,7 @@ Ablation nên dùng cùng retrieval budget và cùng split:
 8. + human constraints.
 
 Không tune threshold trên test set. Báo confidence interval theo video/query,
-và tách latency cold-cache/warm-cache. Package `irrelevant_things/benchmarks/youcook2` đã có để
+và tách latency cold-cache/warm-cache. Package `research_tools/benchmarks/youcook2` đã có để
 đo corpus Video Recall@K qua `http://127.0.0.1:8000/search`, chống ground-truth
 leakage và xuất run manifest/checkpoint. Run hiện có chỉ là smoke/pilot; chưa đủ
 để coi là kết quả full validation hoặc paper, và chưa đánh giá temporal interval.

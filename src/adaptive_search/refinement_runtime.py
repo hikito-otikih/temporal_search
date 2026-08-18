@@ -5,7 +5,7 @@ frontier-wide decode-and-embed orchestration (`refine_session`, region/video-gro
 sampling, budget planning) has been removed along with `commands/refine` and
 `GET /tuples` - the coarse pipeline (`prioritize_videos`) already produces video
 rankings without it, and the youcook2 benchmark (see
-`irrelevant_things/benchmarks/youcook2/hyperparameter_sweep_results.md` and
+`research_tools/benchmarks/youcook2/hyperparameter_sweep_results.md` and
 `boundary_refinement_results.md`) established that stage never beat
 `adaptive_coarse` on real data.
 

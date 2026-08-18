@@ -8,7 +8,7 @@ onset/offset - instead of the expensive frontier-wide refine `adaptive_full`
 used to run (removed; see `refinement_runtime.py`'s module docstring and
 `docs/ADAPTIVE_PIPELINE_MIGRATION.md`).
 
-Ported from `irrelevant_things/benchmarks/youcook2/boundary_refinement.py`,
+Ported from `research_tools/benchmarks/youcook2/boundary_refinement.py`,
 validated there against real YouCook2 queries this session, with one
 correctness fix: `pre_state`/`post_state` are optional here. The benchmark
 version required them (only ever called for "onset"/"offset" moment-oriented

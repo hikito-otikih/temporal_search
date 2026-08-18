@@ -9,7 +9,6 @@ from adaptive_search.schemas import (
     RetrievalHyperparameters,
     SparseCandidate,
 )
-from adaptive_search.algorithms import cluster_temporal_regions
 from adaptive_search.retrieval import fuse_candidates_rrf
 from main import app
 
@@ -53,28 +52,6 @@ class AdaptiveEdgeCaseTests(unittest.TestCase):
         self.assertEqual(e1_frame_one.query_variant, "rrf:en-0,vi-0")
         self.assertNotEqual(e1_frame_one.raw_relevance_score, (0.9 + 50.0) / 2)
 
-    def test_region_chain_is_split_and_not_remerged_past_max_span(self):
-        candidates = [
-            sparse(f"c{frame}", "e1", "rrf", frame, 1.0)
-            for frame in range(21)
-        ]
-        regions = cluster_temporal_regions(
-            candidates,
-            ClusteringHyperparameters(
-                gap_seconds=2.0,
-                margin_seconds=1.0,
-                max_region_seconds=10.0,
-            ),
-        )
-
-        self.assertGreater(len(regions), 1)
-        self.assertTrue(
-            all(
-                region.end_seconds - region.start_seconds <= 10.0
-                for region in regions
-            )
-        )
-
     def test_region_limit_must_leave_room_for_both_margins(self):
         with self.assertRaises(ValidationError):
             ClusteringHyperparameters(
@@ -82,23 +59,6 @@ class AdaptiveEdgeCaseTests(unittest.TestCase):
                 margin_seconds=3.0,
                 max_region_seconds=5.0,
             )
-
-    def test_candidate_calibration_is_independent_per_event(self):
-        regions = cluster_temporal_regions(
-            [
-                sparse("a", "e1", "rrf", 1, 100.0),
-                sparse("b", "e1", "rrf", 2, 101.0),
-                sparse("c", "e2", "rrf", 1, 0.0),
-                sparse("d", "e2", "rrf", 2, 1.0),
-            ],
-            ClusteringHyperparameters(
-                gap_seconds=3.0,
-                margin_seconds=0.0,
-                max_region_seconds=10.0,
-            ),
-        )
-        scores = {region.event_id: region.normalized_coarse_score for region in regions}
-        self.assertAlmostEqual(scores["e1"], scores["e2"])
 
 
 class AdaptiveNoOpApiTests(unittest.TestCase):
@@ -140,7 +100,7 @@ class AdaptiveNoOpApiTests(unittest.TestCase):
             f"/v1/search-sessions/{session_id}/hyperparameters",
             json={
                 "expected_revision": 0,
-                "patch": {"ranking": {"gap_lambda": 0.01}},
+                "patch": {"tuple_ranking": {"relative_delta": 0.15}},
             },
         )
         self.assertEqual(parameter_patch.status_code, 200, parameter_patch.text)

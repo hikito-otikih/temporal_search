@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import re
 
-MAX_ANALYSIS_ATTEMPTS = 2
+# Separate budgets: a transport blip (timeout/connection/rate-limit/5xx) and
+# a validation failure (structurally or semantically invalid LLM output) are
+# unrelated failure categories - sharing one counter meant a single
+# transient network hiccup on the first call could burn half the retry
+# budget before the LLM ever produced output worth validating, leaving too
+# little budget left for the repair loop retries actually exist to support.
+MAX_TRANSPORT_ATTEMPTS = 2
+MAX_VALIDATION_ATTEMPTS = 2
 MAX_RETRY_RESPONSE_CHARS = 16000
 OLLAMA_RETRY_DELAY_SECONDS = 0.25
 TRANSIENT_OLLAMA_STATUSES = {408, 425, 500, 502, 503, 504}
