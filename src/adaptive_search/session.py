@@ -13,7 +13,6 @@ from .exceptions import RevisionConflictError, SessionNotFoundError
 from .schemas import (
     EventDefinition,
     EventProposal,
-    FrameScoreSample,
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
@@ -66,8 +65,6 @@ class ArtifactState(SessionModel):
     revision: int = Field(default=0, ge=0)
     candidates: list[SparseCandidate] = Field(default_factory=list)
     regions: list[TemporalRegion] = Field(default_factory=list)
-    frontier_region_ids: list[str] = Field(default_factory=list)
-    frame_scores: list[FrameScoreSample] = Field(default_factory=list)
     proposals: list[EventProposal] = Field(default_factory=list)
 
 

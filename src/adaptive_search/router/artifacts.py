@@ -1,4 +1,14 @@
-"""Artifact ingestion and read routes (candidates, frame scores, regions, proposals, runs)."""
+"""Artifact ingestion and read routes (candidates, regions, proposals, runs).
+
+No frame-score ingestion route exists here - `/artifacts/frame-scores` and
+its `AdaptiveSearchService.replace_frame_scores()` backing were removed
+along with the refinement frontier (`select_refinement_frontier`); both
+existed only to support an external client precomputing frame-level
+refinement scores and submitting them back into a session, a workflow this
+product does not support. Live boundary refinement via
+`apply_boundary_refinement` (`video_priorities.py`) is unaffected - it
+computes its own scores per request and never persists them to the session.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +16,7 @@ from fastapi import APIRouter, Query
 
 from ..dependencies import adaptive_service
 
-from .api_schemas import CandidateIngestRequest, FrameScoreIngestRequest, RetrieveSessionRequest, RunResponse
+from .api_schemas import CandidateIngestRequest, RetrieveSessionRequest, RunResponse
 from .errors import _raise_api_error
 from .responses import _build_query_variants, _page, _run_response
 
@@ -24,23 +34,6 @@ def ingest_candidates(session_id: str, request: CandidateIngestRequest):
             expected_revision=request.expected_revision,
             event_ids=request.event_ids,
             candidates=request.candidates,
-        )
-        return _run_response(bundle, run)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.post(
-    "/search-sessions/{session_id}/artifacts/frame-scores",
-    response_model=RunResponse,
-)
-def ingest_frame_scores(session_id: str, request: FrameScoreIngestRequest):
-    try:
-        bundle, run = adaptive_service.replace_frame_scores(
-            session_id,
-            expected_revision=request.expected_revision,
-            region_ids=request.region_ids,
-            samples=request.samples,
         )
         return _run_response(bundle, run)
     except Exception as exc:
@@ -92,13 +85,9 @@ def get_regions(
             if (event_id is None or item.event_id == event_id)
             and (video_id is None or item.video_id == video_id)
         ]
-        frontier = set(bundle.artifacts.frontier_region_ids)
         page = items[offset : offset + limit]
         return {
-            "items": [
-                {**item.model_dump(mode="json"), "selected_for_refinement": item.id in frontier}
-                for item in page
-            ],
+            "items": [item.model_dump(mode="json") for item in page],
             "total": len(items),
             "offset": offset,
             "limit": limit,
@@ -122,29 +111,6 @@ def get_proposals(
             for item in bundle.artifacts.proposals
             if (event_id is None or item.event_id == event_id)
             and (video_id is None or item.video_id == video_id)
-        ]
-        return _page(items, offset, limit)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.get("/search-sessions/{session_id}/frame-scores")
-def get_frame_scores(
-    session_id: str,
-    event_id: str | None = None,
-    video_id: str | None = None,
-    region_id: str | None = None,
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=500, ge=1, le=5000),
-):
-    try:
-        bundle = adaptive_service.get_session(session_id)
-        items = [
-            item
-            for item in bundle.artifacts.frame_scores
-            if (event_id is None or item.event_id == event_id)
-            and (video_id is None or item.video_id == video_id)
-            and (region_id is None or item.region_id == region_id)
         ]
         return _page(items, offset, limit)
     except Exception as exc:

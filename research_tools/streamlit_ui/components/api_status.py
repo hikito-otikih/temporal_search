@@ -15,7 +15,7 @@ from services.api_client import ApiError, ConnectionFailure, TemporalApiClient
 from state import keys as K
 from state import session_state as SS
 
-STAGE_ORDER = ("rewrite", "retrieval", "region", "frontier", "refinement", "proposal", "tuple")
+STAGE_ORDER = ("rewrite", "retrieval", "region", "refinement", "proposal", "tuple")
 
 
 def show_api_status(store: Any, client: TemporalApiClient) -> CapabilityResponse | None:

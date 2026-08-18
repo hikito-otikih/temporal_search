@@ -277,25 +277,6 @@ class TemporalApiClient:
         )
         return RunResponse.model_validate(data)
 
-    def ingest_frame_scores(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        region_ids: list[str],
-        samples: list[dict[str, Any]],
-    ) -> RunResponse:
-        data = self._request(
-            "POST",
-            f"/v1/search-sessions/{session_id}/artifacts/frame-scores",
-            json={
-                "expected_revision": expected_revision,
-                "region_ids": region_ids,
-                "samples": samples,
-            },
-        )
-        return RunResponse.model_validate(data)
-
     def retrieve_session(
         self,
         session_id: str,
@@ -345,25 +326,6 @@ class TemporalApiClient:
                 "frame_id": frame_id,
                 "timestamp_seconds": timestamp_seconds,
                 "region_id": region_id,
-            },
-        )
-        return MutationResponse.model_validate(data)
-
-    def reject_proposal(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        event_id: str,
-        proposal_id: str,
-    ) -> MutationResponse:
-        data = self._request(
-            "POST",
-            f"/v1/search-sessions/{session_id}/commands/reject-proposal",
-            json={
-                "expected_revision": expected_revision,
-                "event_id": event_id,
-                "proposal_id": proposal_id,
             },
         )
         return MutationResponse.model_validate(data)
@@ -459,28 +421,6 @@ class TemporalApiClient:
                 "offset": offset,
                 "limit": limit,
                 "apply_boundary_refinement": apply_boundary_refinement,
-            },
-        )
-
-    def get_frame_scores(
-        self,
-        session_id: str,
-        *,
-        event_id: str | None = None,
-        video_id: str | None = None,
-        region_id: str | None = None,
-        offset: int = 0,
-        limit: int = 500,
-    ) -> dict[str, Any]:
-        return self._request(
-            "GET",
-            f"/v1/search-sessions/{session_id}/frame-scores",
-            params={
-                "event_id": event_id,
-                "video_id": video_id,
-                "region_id": region_id,
-                "offset": offset,
-                "limit": limit,
             },
         )
 

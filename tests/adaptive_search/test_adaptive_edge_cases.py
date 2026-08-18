@@ -1,11 +1,10 @@
 import unittest
 
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from adaptive_search.dependencies import adaptive_service
 from adaptive_search.schemas import (
-    ClusteringHyperparameters,
+    EventDefinition,
     RetrievalHyperparameters,
     SparseCandidate,
 )
@@ -52,12 +51,13 @@ class AdaptiveEdgeCaseTests(unittest.TestCase):
         self.assertEqual(e1_frame_one.query_variant, "rrf:en-0,vi-0")
         self.assertNotEqual(e1_frame_one.raw_relevance_score, (0.9 + 50.0) / 2)
 
-    def test_region_limit_must_leave_room_for_both_margins(self):
-        with self.assertRaises(ValidationError):
-            ClusteringHyperparameters(
-                gap_seconds=1.0,
-                margin_seconds=3.0,
-                max_region_seconds=5.0,
+    def test_transition_profile_requires_observable_pre_and_post_states(self):
+        with self.assertRaisesRegex(ValueError, "require both pre_state"):
+            EventDefinition(
+                event_id="e1",
+                original_query="door opens",
+                anchor_query="an opening door",
+                boundary_type="transition",
             )
 
 

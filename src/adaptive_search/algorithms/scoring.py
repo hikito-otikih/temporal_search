@@ -93,7 +93,12 @@ def calibrate_frame_scores(
 
     Pre and post states are normalized as a pair at each frame.  Anchor and
     motion signals use robust sigmoid calibration across the local region.
-    Raw fields are copied unchanged into the returned samples.
+    Raw fields are copied unchanged into the returned samples. Used by
+    `generate_boundary_proposals` regardless of where the raw samples came
+    from - session-level ingestion (removed, see `service.py`'s docstring
+    note) or the live per-request boundary-refinement sweep
+    (`boundary_refinement.py`, which constructs raw `FrameScoreSample`s and
+    always relies on this calibration step, never skips it).
     """
 
     parameters = parameters or BoundaryHyperparameters()

@@ -16,11 +16,11 @@ class AdaptiveInvalidationTests(unittest.TestCase):
         paths = {"tuple_ranking.order_weight"}
         self.assertEqual(invalidated_for_parameters(paths), ["tuple"])
 
-    def test_frontier_budget_change_starts_at_frontier(self):
-        paths = {"refinement.max_total_regions"}
+    def test_refinement_weight_change_starts_at_refinement(self):
+        paths = {"refinement.video_mean_weight"}
         self.assertEqual(
             invalidated_for_parameters(paths),
-            ["frontier", "refinement", "proposal", "tuple"],
+            ["refinement", "proposal", "tuple"],
         )
 
     def test_pre_state_event_change_reuses_sparse_retrieval(self):

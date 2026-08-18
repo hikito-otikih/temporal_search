@@ -39,7 +39,7 @@ from .tuple_client import TemporalSearchBackendClient
 
 SCHEMA_VERSION = "youcook2-tuple-recall/v1"
 
-TuplePipeline = Literal["legacy_temporal", "legacy_ambiguous", "adaptive_coarse", "adaptive_full"]
+TuplePipeline = Literal["legacy_temporal", "legacy_ambiguous", "adaptive_coarse"]
 
 _LEGACY_SEARCHER_TYPES: dict[str, str] = {
     "legacy_temporal": "TemporalSearcher",
@@ -59,40 +59,23 @@ class TupleRunConfig:
     timeout_seconds: float
     retries: int
     retry_backoff_seconds: float
-    # Historical note: this and the adaptive_full/commands/refine path below
-    # predate that endpoint's removal (see docs/ADAPTIVE_PIPELINE_MIGRATION.md)
-    # - commands/refine no longer exists, so this flag has no live server
-    # endpoint to configure any more. Left as-is (out of scope for the
-    # max_frames_per_run/dense-sampling field removal this comment used to
-    # describe) pending a dedicated pass over adaptive_full's benchmark mode.
-    adaptive_max_frames: int | None = None
-    # Caps the size of whichever ranked list each adaptive stage produces -
+    # Caps the size of the ranked list GET .../video-priorities returns -
     # independent of --adaptive-top-k (the raw per-variant retrieval cap).
-    # adaptive_full: hyperparameters.ranking.top_k (server default 20), how
-    # many TupleResults GET .../tuples returns. adaptive_coarse: the `limit`
-    # query param on GET .../video-priorities (server default 100, max 1000).
     # Raise this if you want e.g. Recall@50 to mean anything. None keeps
-    # the server's own default.
+    # the server's own default (100, max 1000).
     adaptive_ranking_top_k: int | None = None
     # hyperparameters.retrieval overrides (None keeps the server's own
     # default for that field). top_n_per_variant/top_n_fused/rrf_k feed
-    # fuse_candidates_rrf(); apply to both adaptive_coarse and adaptive_full
-    # since both go through the same retrieval stage.
+    # fuse_candidates_rrf().
     adaptive_top_n_per_variant: int | None = None
     adaptive_top_n_fused: int | None = None
     adaptive_rrf_k: int | None = None
-    # hyperparameters.refinement overrides. The three weights feed
-    # prioritize_videos() (used by adaptive_coarse's ranking directly, and
-    # by adaptive_full's select_refinement_frontier() to pick which videos
-    # get dense-refined at all). max_initial_videos/max_total_regions/
-    # max_regions_per_event_per_video only affect adaptive_full's frontier
-    # width - adaptive_coarse ranks every formed region regardless.
+    # hyperparameters.refinement overrides - the three weights that blend
+    # into GET .../video-priorities' priority_score alongside
+    # video_distinctness_weight (router/video_priorities.py).
     adaptive_video_coverage_weight: float | None = None
     adaptive_video_mean_weight: float | None = None
     adaptive_video_min_weight: float | None = None
-    adaptive_max_initial_videos: int | None = None
-    adaptive_max_total_regions: int | None = None
-    adaptive_max_regions_per_event_per_video: int | None = None
 
 
 def source_fingerprint(source_path: Path) -> tuple[str, int]:
@@ -140,17 +123,8 @@ def _build_event_payload(group: VideoQueryGroup) -> list[dict[str, Any]]:
     ]
 
 
-def _adaptive_hyperparameters(
-    config: TupleRunConfig, *, include_ranking: bool
-) -> dict[str, Any] | None:
-    """Build a session hyperparameters override, or None to send nothing.
-
-    ``include_ranking`` gates ``ranking.top_k`` specifically: adaptive_full
-    reads it directly, but adaptive_coarse's ranking never consults it (that
-    pipeline's --adaptive-ranking-top-k instead caps the video-priorities
-    page via a query param) - sending it there would be a silently-unused
-    field on the stored session, misleading anyone reading it back.
-    """
+def _adaptive_hyperparameters(config: TupleRunConfig) -> dict[str, Any] | None:
+    """Build a session hyperparameters override, or None to send nothing."""
 
     retrieval = {
         key: value
@@ -167,12 +141,6 @@ def _adaptive_hyperparameters(
             ("video_coverage_weight", config.adaptive_video_coverage_weight),
             ("video_mean_weight", config.adaptive_video_mean_weight),
             ("video_min_weight", config.adaptive_video_min_weight),
-            ("max_initial_videos", config.adaptive_max_initial_videos),
-            ("max_total_regions", config.adaptive_max_total_regions),
-            (
-                "max_regions_per_event_per_video",
-                config.adaptive_max_regions_per_event_per_video,
-            ),
         )
         if value is not None
     }
@@ -181,16 +149,7 @@ def _adaptive_hyperparameters(
         hyperparameters["retrieval"] = retrieval
     if refinement:
         hyperparameters["refinement"] = refinement
-    if include_ranking and config.adaptive_ranking_top_k is not None:
-        hyperparameters["ranking"] = {"top_k": config.adaptive_ranking_top_k}
     return hyperparameters or None
-
-
-def _adaptive_event_timestamps(tuple_item: Mapping[str, Any]) -> dict[str, float]:
-    return {
-        str(proposal["event_id"]): float(proposal["timestamp_seconds"])
-        for proposal in tuple_item.get("proposals", [])
-    }
 
 
 def _rank_of_video(items: Sequence[Mapping[str, Any]], video_key: str, target: str) -> int | None:
@@ -235,7 +194,7 @@ def _run_adaptive_coarse(
 ) -> dict[str, Any]:
     session_id = backend.create_adaptive_session(
         _build_event_payload(group),
-        hyperparameters=_adaptive_hyperparameters(config, include_ranking=False),
+        hyperparameters=_adaptive_hyperparameters(config),
     )
     backend.retrieve(session_id, top_k=config.adaptive_top_k)
     priorities = backend.get_video_priorities(session_id, limit=config.adaptive_ranking_top_k)
@@ -249,52 +208,10 @@ def _run_adaptive_coarse(
     }
 
 
-def _run_adaptive_full(
-    backend: TemporalSearchBackendClient, group: VideoQueryGroup, config: TupleRunConfig
-) -> dict[str, Any]:
-    session_id = backend.create_adaptive_session(
-        _build_event_payload(group),
-        hyperparameters=_adaptive_hyperparameters(config, include_ranking=True),
-    )
-    revision = backend.retrieve(session_id, top_k=config.adaptive_top_k)
-    outcome = backend.refine(
-        session_id, expected_revision=revision, max_frames=config.adaptive_max_frames
-    )
-    if not outcome.available:
-        return {
-            "status": "unavailable",
-            "rank": None,
-            "unique_video_count": 0,
-            "session_id": session_id,
-            "unavailable_reason": outcome.unavailable_reason,
-        }
-    tuples = backend.get_tuples(session_id)
-    rank = None
-    matched_tuple: Mapping[str, Any] | None = None
-    for position, item in enumerate(tuples, 1):
-        if canonical_video_id(str(item["video_id"])) == group.video_id:
-            rank = position
-            matched_tuple = item
-            break
-    row: dict[str, Any] = {
-        "status": "ok",
-        "rank": rank,
-        "unique_video_count": len({str(item["video_id"]) for item in tuples}),
-        "session_id": session_id,
-        "top_score": tuples[0].get("normalized_final_score") if tuples else None,
-    }
-    if matched_tuple is not None:
-        row["event_timestamp_accuracy"] = event_timestamp_accuracy(
-            group, _adaptive_event_timestamps(matched_tuple)
-        )
-    return row
-
-
 _PIPELINE_RUNNERS = {
     "legacy_temporal": _run_legacy,
     "legacy_ambiguous": _run_legacy,
     "adaptive_coarse": _run_adaptive_coarse,
-    "adaptive_full": _run_adaptive_full,
 }
 
 
@@ -469,9 +386,9 @@ def run_tuple_benchmark(
             "recall_ks": list(config.recall_ks),
             "unavailable_count": unavailable_count,
             "unavailable_note": (
-                "groups with status=unavailable (e.g. live refinement not configured "
-                "for adaptive_full) are excluded from recall/MRR above; check "
-                "unavailable_count before comparing this pipeline against others"
+                "groups with status=unavailable are excluded from recall/MRR "
+                "above; check unavailable_count before comparing this pipeline "
+                "against others"
             ),
         }
     )

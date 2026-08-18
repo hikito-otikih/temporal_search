@@ -23,6 +23,7 @@ from .constants import (
     OLLAMA_RETRY_DELAY_SECONDS,
     SYSTEM_PROMPT,
     TRANSIENT_OLLAMA_STATUSES,
+    VIETNAMESE_SIGNATURE_PATTERN,
 )
 from .exceptions import (
     ConfigurationError,
@@ -197,6 +198,17 @@ def _validate_standalone_context(
                     f'events[{index}].retrieval_queries_en[{query_index}] must be '
                     'an English translation carrying the same standalone context, '
                     'not a literal copy of original_query'
+                )
+            # A literal-echo check alone lets an LLM leave the field in (or
+            # paraphrase it into) Vietnamese pass as long as it doesn't
+            # byte-match original_query - genuine English text never
+            # contains these characters, so this catches "not actually
+            # translated" independent of the echo check above.
+            if VIETNAMESE_SIGNATURE_PATTERN.search(en_query):
+                raise SemanticValidationError(
+                    f'events[{index}].retrieval_queries_en[{query_index}] must be '
+                    'written in English - it contains Vietnamese-specific '
+                    'characters, so it was not actually translated'
                 )
 
     minimum_matches = min(2, len(context_terms))
@@ -446,6 +458,9 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
                 raise OllamaTimeoutError('Ollama request timed out') from exc
             except httpx.RequestError as exc:
                 transport_attempts += 1
@@ -484,6 +499,9 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
                 raise OllamaRateLimitError('Ollama rate limit exceeded')
             if response.is_error:
                 transport_attempts += 1

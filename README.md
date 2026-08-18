@@ -379,11 +379,11 @@ data/
 │   └── L21_V001.csv
 └── objects/
     └── L21_V001/
-        ├── 000.json
-        └── 001.json
+        ├── 001.json
+        └── 002.json
 ```
 
-The CSV must contain a `frame_idx` column. The matching row's zero-based index selects the object JSON filename (`000.json`, `001.json`, and so on). Each JSON file must provide parallel `detection_class_names` and `detection_scores` arrays.
+The CSV must contain `frame_idx` and `n` columns, with `n` starting at 1 (e.g. `frame_idx=0` pairs with `n=1`). The matching row's own `n` value (not its position in the file) selects the object JSON filename, zero-padded to three digits (`001.json`, `002.json`, and so on). Each JSON file must provide parallel `detection_class_names` and `detection_scores` arrays.
 
 ```json
 {
@@ -446,7 +446,6 @@ Pages:
 | `pages/01_Legacy_Search.py` | One-shot `/temporal-search`, no session. |
 | `pages/02_Adaptive_Session.py` | Session stepper: events → candidates → regions → frame scores → proposals → tuples → feedback. |
 | `pages/03_Region_Inspector.py` | Timeline, keyframe filmstrip, score curves. |
-| `pages/04_Tuple_Explorer.py` | Ordered tuples, gaps, score decomposition, export. |
 | `pages/05_YouCook2_Evaluation.py` | Corpus Video Recall@K with leakage guard and video dedup. |
 | `pages/06_Run_Comparison.py` | Compare runs/hyperparameter presets. |
 

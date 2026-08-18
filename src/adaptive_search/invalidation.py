@@ -11,23 +11,15 @@ PIPELINE_STAGES = (
     "rewrite",
     "retrieval",
     "region",
-    "frontier",
     "refinement",
     "proposal",
     "tuple",
 )
 
 
-# Longest-prefix match is used.  Selection weights are deliberately separated
-# from final-ranking weights so a tuple-only change cannot silently alter the
-# refinement frontier.
+# Longest-prefix match is used.
 PARAMETER_STAGE_PREFIXES: dict[str, str] = {
     "retrieval": "retrieval",
-    "clustering": "region",
-    "refinement.max_initial_videos": "frontier",
-    "refinement.max_regions_per_event_per_video": "frontier",
-    "refinement.max_total_regions": "frontier",
-    "refinement.exploration_region_ratio": "frontier",
     "refinement": "refinement",
     "embedding": "refinement",
     "boundary": "proposal",
@@ -90,14 +82,8 @@ def invalidated_for_constraint(command: str) -> list[str]:
     """Return MVP invalidation; live providers may prepend scoped refinement."""
 
     if command in {"mark_videos", "clear_allowed_videos"}:
-        return ["frontier", "refinement", "proposal", "tuple"]
-    if command in {
-        "fix_region",
-        "fix_frame",
-        "reject_region",
-        "reject_proposal",
-        "clear_constraint",
-    }:
+        return ["refinement", "proposal", "tuple"]
+    if command in {"fix_frame", "clear_constraint"}:
         return ["proposal", "tuple"]
     raise ValueError(f"unknown constraint command: {command}")
 

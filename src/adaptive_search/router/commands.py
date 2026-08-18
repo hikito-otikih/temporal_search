@@ -1,4 +1,4 @@
-"""Session commands that mutate constraints (mark videos, fix a frame, reject a proposal, clear a constraint)."""
+"""Session commands that mutate constraints (mark videos, fix a frame, clear a constraint)."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from .api_schemas import (
     FixFrameRequest,
     MarkVideosRequest,
     MutationResponse,
-    RejectProposalRequest,
 )
 from .errors import _raise_api_error
 from .responses import _mutation_response
@@ -49,23 +48,6 @@ def fix_frame(session_id: str, request: FixFrameRequest):
             frame_id=request.frame_id,
             timestamp_seconds=request.timestamp_seconds,
             region_id=request.region_id,
-        )
-        return _mutation_response(bundle, invalidated)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.post(
-    "/search-sessions/{session_id}/commands/reject-proposal",
-    response_model=MutationResponse,
-)
-def reject_proposal(session_id: str, request: RejectProposalRequest):
-    try:
-        bundle, invalidated = adaptive_service.reject_proposal(
-            session_id,
-            expected_revision=request.expected_revision,
-            event_id=request.event_id,
-            proposal_id=request.proposal_id,
         )
         return _mutation_response(bundle, invalidated)
     except Exception as exc:

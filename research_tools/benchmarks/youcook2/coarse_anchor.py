@@ -32,12 +32,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .core import VideoQueryGroup, canonical_video_id
-from .legacy_clustering import cluster_temporal_regions
+from .legacy_clustering import ClusteringHyperparameters, cluster_temporal_regions
 from adaptive_search.algorithms import prioritize_videos
 from adaptive_search.client import QueryVariant, UpstreamSearchClient
 from adaptive_search.retrieval import fuse_candidates_rrf
 from adaptive_search.schemas import (
-    ClusteringHyperparameters,
     RefinementHyperparameters,
     RetrievalHyperparameters,
 )

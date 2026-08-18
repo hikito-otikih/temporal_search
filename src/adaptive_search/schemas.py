@@ -119,25 +119,19 @@ class RetrievalHyperparameters(StrictModel):
     query_variants_per_event: PositiveInt = 4
 
 
-class ClusteringHyperparameters(StrictModel):
-    gap_seconds: Seconds = 3.0
-    margin_seconds: Seconds = 3.0
-    max_region_seconds: PositiveFloat = 30.0
-
-    @model_validator(mode="after")
-    def validate_region_limit(self) -> "ClusteringHyperparameters":
-        if self.max_region_seconds < 2.0 * self.margin_seconds:
-            raise ValueError(
-                "max_region_seconds must be >= 2 * margin_seconds"
-            )
-        return self
-
-
 class RefinementHyperparameters(StrictModel):
-    """Frontier budget, video-priority blend weights, and fully
-    fingerprintable inference configuration. Dense/medium sampling-interval
-    fields were removed with `commands/refine` (the dense orchestrator that
-    was their only consumer) - see `docs/ADAPTIVE_PIPELINE_MIGRATION.md`."""
+    """Video-priority blend weights and fully fingerprintable inference
+    configuration. Dense/medium sampling-interval fields were removed with
+    `commands/refine` (the dense orchestrator that was their only consumer).
+    The refinement-frontier budget fields (max_initial_videos,
+    max_regions_per_event_per_video, max_total_regions,
+    exploration_region_ratio) were removed alongside `/artifacts/frame-scores`
+    and `select_refinement_frontier` - all three existed only to support an
+    external client precomputing frame-level refinement scores and
+    submitting them back into a session, a workflow this product does not
+    support (live boundary refinement via `apply_boundary_refinement` is a
+    separate, unaffected mechanism - see `boundary_refinement.py`). See
+    `docs/ADAPTIVE_PIPELINE_MIGRATION.md`."""
 
     embedding_model: ModelRuntimeSpec = Field(
         default_factory=_runtime_embedding_model
@@ -150,11 +144,6 @@ class RefinementHyperparameters(StrictModel):
     )
     quality_profile_enabled: bool = False
     use_reranker: bool = False
-
-    max_initial_videos: PositiveInt = 20
-    max_regions_per_event_per_video: PositiveInt = 5
-    max_total_regions: PositiveInt = 400
-    exploration_region_ratio: UnitScore = 0.15
 
     # Winner config from the same hyperparameter sweep: mean-only ranking beat
     # every blend that included coverage or min once retrieval is wide (see
@@ -330,9 +319,6 @@ class SearchHyperparameters(StrictModel):
     retrieval: RetrievalHyperparameters = Field(
         default_factory=RetrievalHyperparameters
     )
-    clustering: ClusteringHyperparameters = Field(
-        default_factory=ClusteringHyperparameters
-    )
     refinement: RefinementHyperparameters = Field(
         default_factory=RefinementHyperparameters
     )
@@ -469,9 +455,8 @@ class EventConstraint(StrictModel):
     fixed_frame_id: NonNegativeInt | None = None
     fixed_timestamp_seconds: Seconds | None = None
     rejected_region_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
-    rejected_proposal_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
 
-    @field_validator("rejected_region_ids", "rejected_proposal_ids", mode="before")
+    @field_validator("rejected_region_ids", mode="before")
     @classmethod
     def accept_json_rejection_arrays(cls, value):
         if isinstance(value, list):

@@ -29,6 +29,32 @@ def _region_allowed(
     if event_constraint.fixed_video_id is not None:
         if region.video_id != event_constraint.fixed_video_id:
             return False
+        # An exact-timestamp pin (fixed_timestamp_seconds set) narrows this
+        # event, within the pinned video, to only the region actually
+        # covering that timestamp - mirrors _synthetic_fixed_regions'
+        # own trigger condition exactly (same "defer to a genuine
+        # fixed_region_id pin" carve-out below), so both functions agree on
+        # what a given constraint means. fixed_region_id itself is not
+        # checked here since fix_frame() always stamps one too, often a
+        # synthetic placeholder that names no real TemporalRegion. Without
+        # this, once a real region already existed at the fixed timestamp
+        # (so _synthetic_fixed_regions had nothing to add), every other
+        # region for this event in the same video remained equally
+        # eligible and a higher-scoring one could still win pooling over
+        # the frame the user explicitly picked.
+        exact_timestamp_pin = (
+            event_constraint.fixed_timestamp_seconds is not None
+            and not (
+                event_constraint.fixed_frame_id is None
+                and event_constraint.fixed_region_id is not None
+            )
+        )
+        if exact_timestamp_pin and not (
+            region.start_seconds
+            <= event_constraint.fixed_timestamp_seconds
+            <= region.end_seconds
+        ):
+            return False
     if (
         event_constraint.fixed_frame_id is None
         and event_constraint.fixed_region_id is not None

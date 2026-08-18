@@ -1,14 +1,13 @@
 """Independent per-event video ranking (`prioritize_videos` - no longer
 called from `GET /video-priorities`, which uses `tuple_ranking.py`
 exclusively, but still real, tested, and the standing comparison baseline
-every tuple-ranking benchmark round measures against) and refinement
-frontier selection."""
+every tuple-ranking benchmark round measures against)."""
 
 from __future__ import annotations
 
 from collections import defaultdict
 from statistics import fmean
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from ..schemas import RefinementHyperparameters, SearchConstraints, TemporalRegion, VideoPriority
 from .constraints import _region_allowed
@@ -122,139 +121,3 @@ def prioritize_videos(
             item.video_id,
         ),
     )
-
-
-def select_refinement_frontier(
-    regions: Sequence[TemporalRegion],
-    video_priorities: Sequence[VideoPriority],
-    event_ids: Sequence[str],
-    parameters: RefinementHyperparameters | None = None,
-    constraints: SearchConstraints | None = None,
-    *,
-    forced_region_ids: Iterable[str] = (),
-) -> list[TemporalRegion]:
-    """Select a deterministic, budgeted mix of priority and exploration regions."""
-
-    parameters = parameters or RefinementHyperparameters()
-    constraints = constraints or SearchConstraints()
-    ordered_events = tuple(dict.fromkeys(event_ids))
-    event_rank = {event_id: rank for rank, event_id in enumerate(ordered_events)}
-    active = [region for region in regions if _region_allowed(region, constraints)]
-    if not active:
-        return []
-    scores = _region_score_map(active)
-    priority_rank = {
-        item.video_id: rank for rank, item in enumerate(video_priorities)
-    }
-
-    forced_ids = set(forced_region_ids)
-    forced_ids.update(
-        event_constraint.fixed_region_id
-        for event_constraint in constraints.event_constraints.values()
-        if event_constraint.fixed_region_id is not None
-    )
-    forced = sorted(
-        [region for region in active if region.id in forced_ids],
-        key=lambda item: (
-            event_rank.get(item.event_id, len(event_rank)),
-            item.video_id,
-            item.start_seconds,
-            item.id,
-        ),
-    )
-    selected: list[TemporalRegion] = list(forced)
-    selected_ids = {region.id for region in selected}
-
-    top_video_ids = {
-        item.video_id
-        for item in video_priorities[: parameters.max_initial_videos]
-    }
-    grouped: dict[tuple[str, str], list[TemporalRegion]] = defaultdict(list)
-    for region in active:
-        if region.video_id in top_video_ids and region.event_id in event_rank:
-            grouped[(region.video_id, region.event_id)].append(region)
-
-    # Guarantee independent evidence for each event before filling by video rank.
-    independent: list[TemporalRegion] = []
-    for event_id in ordered_events:
-        matches = [region for region in active if region.event_id == event_id]
-        if matches:
-            independent.append(
-                min(
-                    matches,
-                    key=lambda item: (
-                        -scores[item.id],
-                        priority_rank.get(item.video_id, len(priority_rank)),
-                        item.start_seconds,
-                        item.id,
-                    ),
-                )
-            )
-
-    core: list[TemporalRegion] = independent
-    for group_key in sorted(
-        grouped,
-        key=lambda key: (
-            priority_rank.get(key[0], len(priority_rank)),
-            event_rank.get(key[1], len(event_rank)),
-            key,
-        ),
-    ):
-        ranked = sorted(
-            grouped[group_key],
-            key=lambda item: (-scores[item.id], item.start_seconds, item.id),
-        )
-        core.extend(ranked[: parameters.max_regions_per_event_per_video])
-    core = list(dict.fromkeys(region.id for region in core))
-    region_by_id = {region.id: region for region in active}
-    core_regions = [region_by_id[region_id] for region_id in core]
-
-    total_budget = parameters.max_total_regions
-    if len(selected) >= total_budget:
-        # Explicit user selections take precedence over an automatic budget.
-        return selected
-    remaining_budget = total_budget - len(selected)
-    exploration_slots = min(
-        remaining_budget,
-        int(total_budget * parameters.exploration_region_ratio),
-    )
-    core_slots = remaining_budget - exploration_slots
-    for region in core_regions:
-        if region.id in selected_ids:
-            continue
-        if core_slots <= 0:
-            break
-        selected.append(region)
-        selected_ids.add(region.id)
-        core_slots -= 1
-
-    # Stable round-robin order by event/video/time makes exploration replayable.
-    exploration = sorted(
-        [region for region in active if region.id not in selected_ids],
-        key=lambda item: (
-            event_rank.get(item.event_id, len(event_rank)),
-            item.video_id,
-            item.start_seconds,
-            item.id,
-        ),
-    )
-    for region in exploration[:exploration_slots]:
-        selected.append(region)
-        selected_ids.add(region.id)
-
-    # If rounding or duplicate core regions left room, fill with strongest evidence.
-    if len(selected) < total_budget:
-        remainder = sorted(
-            [region for region in active if region.id not in selected_ids],
-            key=lambda item: (
-                -scores[item.id],
-                priority_rank.get(item.video_id, len(priority_rank)),
-                event_rank.get(item.event_id, len(event_rank)),
-                item.start_seconds,
-                item.id,
-            ),
-        )
-        for region in remainder[: total_budget - len(selected)]:
-            selected.append(region)
-            selected_ids.add(region.id)
-    return selected

@@ -259,6 +259,56 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         self.assertEqual(tuples[0].region_ids, ("r1_2", "r2"))
         self.assertAlmostEqual(tuples[0].score, (0.60 + 0.50) / 2 + 1.0)
 
+    def test_a_cap_below_event_count_plus_one_still_returns_a_result(self) -> None:
+        """Regression test for a real reported bug: reaching even one
+        complete result costs a minimum of len(event_ids)+1 heap pops (one
+        per event to walk root-to-leaf, plus one more to pop the finalized
+        leaf itself) - a caller-supplied max_combinations_per_video below
+        that floor made it structurally impossible to ever return a single
+        result, even with a region plainly available (reported: cap=1
+        returned zero video priorities despite an existing region)."""
+
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.8),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=5.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(max_combinations_per_video=1, max_tuples_per_video=1)
+        tuples = assemble_region_tuples_for_video("v1", ["e1"], regions, candidates_by_id, params)
+        self.assertEqual(len(tuples), 1)
+        self.assertEqual(tuples[0].region_ids, ("r1",))
+
+    def test_heavily_tied_pool_still_returns_results_under_a_modest_cap(self) -> None:
+        """Regression test for a real reported bug: heapq's FIFO tie-break
+        among equal-priority entries caused near-breadth-first expansion
+        across every sibling at a shallow level before any path reached a
+        complete leaf - reported as 400 valid tied leaves and cap 10
+        returning zero tuples while the heap grew to 191 entries. Depth is
+        now a secondary sort key, so the search commits to finishing one
+        path before fanning out into the next."""
+
+        e1_regions = [
+            _region(f"r1_{i}", event_id="e1", video_id="v1", candidate_ids=[f"c1_{i}"], normalized_coarse_score=0.5)
+            for i in range(20)
+        ]
+        e2_regions = [
+            _region(f"r2_{i}", event_id="e2", video_id="v1", candidate_ids=[f"c2_{i}"], normalized_coarse_score=0.5)
+            for i in range(20)
+        ]
+        candidates_by_id = {}
+        for i in range(20):
+            candidates_by_id[f"c1_{i}"] = _candidate(f"c1_{i}", event_id="e1", video_id="v1", timestamp_seconds=1.0 + i, raw_relevance_score=1.0)
+            candidates_by_id[f"c2_{i}"] = _candidate(f"c2_{i}", event_id="e2", video_id="v1", timestamp_seconds=100.0 + i, raw_relevance_score=1.0)
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, max_regions_per_event=20,
+            max_combinations_per_video=10, max_tuples_per_video=5,
+        )
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2"], e1_regions + e2_regions, candidates_by_id, params,
+        )
+        self.assertGreater(len(tuples), 0)
+
     def test_adjacent_gap_constraint_hard_rejects_violating_combination(self) -> None:
         regions = [
             _region("r1_close", event_id="e1", video_id="v1", candidate_ids=["c1c"], normalized_coarse_score=0.9, start_seconds=10.0, end_seconds=10.0),
@@ -560,6 +610,43 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
         )
         self.assertNotIn("v2", tuples_by_video)
         self.assertEqual(tuples_by_video["v1"][0].timestamps, (42.0,))
+
+    def test_fixed_timestamp_wins_even_when_a_real_region_already_covers_it(self):
+        # Distinct from test_fixed_timestamp_without_existing_region_is_
+        # respected (there, no region covers the fixed timestamp, so
+        # _synthetic_fixed_regions always has to synthesize one). Here the
+        # fixed timestamp exactly matches r2's own span, so synthesis has
+        # nothing to add (already_covered) - _region_allowed's video-only
+        # filter used to leave r1 (higher-scoring, wrong timestamp) equally
+        # eligible, and pooling picked it over the user's explicit pick.
+        regions = [
+            _region(
+                "r1", event_id="e1", video_id="v1", candidate_ids=["c1"],
+                normalized_coarse_score=0.9, start_seconds=10.0, end_seconds=10.0,
+            ),
+            _region(
+                "r2", event_id="e1", video_id="v1", candidate_ids=["c2"],
+                normalized_coarse_score=0.3, start_seconds=20.0, end_seconds=20.0,
+            ),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e1", video_id="v1", timestamp_seconds=20.0, raw_relevance_score=1.0),
+        }
+        constraints = SearchConstraints(
+            event_constraints={
+                "e1": EventConstraint(
+                    fixed_video_id="v1", fixed_frame_id=600, fixed_timestamp_seconds=20.0,
+                ),
+            }
+        )
+        params = TupleRankingHyperparameters(relative_delta=1.0)
+        _, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        winner = tuples_by_video["v1"][0]
+        self.assertEqual(winner.region_ids, ("r2",))
+        self.assertEqual(winner.timestamps, (20.0,))
 
 
 def _event(event_id, *, relation="unknown", reference=None):

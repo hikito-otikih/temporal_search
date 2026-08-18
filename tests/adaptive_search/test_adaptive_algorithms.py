@@ -4,7 +4,6 @@ from adaptive_search.algorithms import (
     calibrate_frame_scores,
     generate_boundary_proposals,
     prioritize_videos,
-    select_refinement_frontier,
     temporal_nms,
 )
 from adaptive_search.schemas import (
@@ -119,47 +118,6 @@ class AdaptiveAlgorithmTests(unittest.TestCase):
             radius_seconds=0.5,
         )
         self.assertEqual({item.id for item in kept}, {"strong", "far"})
-
-    def test_frontier_keeps_independent_evidence_for_each_event(self):
-        regions = [
-            TemporalRegion(
-                id="r1",
-                session_id="session",
-                event_id="e1",
-                video_id="video-a",
-                start_seconds=0.0,
-                end_seconds=2.0,
-                candidate_ids=("c1",),
-                raw_coarse_score=0.9,
-                normalized_coarse_score=0.9,
-            ),
-            TemporalRegion(
-                id="r2",
-                session_id="session",
-                event_id="e2",
-                video_id="video-b",
-                start_seconds=3.0,
-                end_seconds=5.0,
-                candidate_ids=("c2",),
-                raw_coarse_score=0.8,
-                normalized_coarse_score=0.8,
-            ),
-        ]
-        parameters = RefinementHyperparameters(
-            max_initial_videos=1,
-            max_regions_per_event_per_video=1,
-            max_total_regions=2,
-            exploration_region_ratio=0.0,
-        )
-        priorities = prioritize_videos(regions, ["e1", "e2"], parameters)
-        frontier = select_refinement_frontier(
-            regions,
-            priorities,
-            ["e1", "e2"],
-            parameters,
-        )
-
-        self.assertEqual({item.event_id for item in frontier}, {"e1", "e2"})
 
     def test_prioritize_videos_distinctness_defaults_to_inert(self):
         """video_distinctness_weight=0.0 (default) must not change

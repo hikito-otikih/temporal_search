@@ -331,3 +331,25 @@ nữa; `GET /v1/searchers` xác nhận `live_refinement_available=true` trở l�
 - **`legacy_search` recall thấp ở `top_k_each_query` nhỏ** (§7.2) không được
   cải thiện trong phạm vi migration này — chỉ đúng khi flag refine bật/tắt
   đều cho kết quả giống hệt nhau về mặt retrieval, đúng như kỳ vọng.
+
+## 9. Cập nhật 2026-08-18: `POST /artifacts/frame-scores` và refinement frontier bị xoá
+
+§2 ở trên từng liệt kê `select_refinement_frontier`, `_rebuild_frontier`,
+`frontier_region_ids`, stage `"frontier"`, `ArtifactCounts.frontier_regions`,
+`GET /regions`'s `selected_for_refinement`, và `POST /artifacts/frame-scores`
+là **"được giữ nguyên, có lý do rõ ràng"** vì chúng pure/deterministic, không
+tốn chi phí GPU. Quyết định đó bị đảo ngược hôm nay: sản phẩm xác nhận sẽ
+**không bao giờ hỗ trợ một client bên ngoài tự tính điểm frame rồi nộp lại
+vào session** — đây là workflow duy nhất mà toàn bộ cụm tính năng này tồn tại
+để phục vụ. `apply_boundary_refinement` (§4-§5, live, tự tính điểm mỗi
+request) là cơ chế refine đang hoạt động thật và **không bị ảnh hưởng**.
+
+**Đã xoá khỏi `src/adaptive_search/`:**
+- `POST /artifacts/frame-scores`, `GET .../frame-scores` (endpoint), `AdaptiveSearchService.replace_frame_scores()`, `FrameScoreIngestRequest`.
+- `select_refinement_frontier` (`algorithms/ranking.py`), `_rebuild_frontier`, `_frame_score_acceptance_window` (`service_helpers.py`).
+- `ArtifactState.frontier_region_ids` / `.frame_scores`, `ArtifactCounts.frontier_regions` / `.frame_scores`, `GET /regions`'s `selected_for_refinement`.
+- Stage `"frontier"` khỏi `PIPELINE_STAGES`; `ClusteringHyperparameters` (toàn bộ class — `gap_seconds`/`margin_seconds`/`max_region_seconds` chỉ còn được `_frame_score_acceptance_window` dùng, giờ cũng bị xoá); `RefinementHyperparameters.max_initial_videos`/`max_regions_per_event_per_video`/`max_total_regions`/`exploration_region_ratio`.
+
+**Vẫn giữ, không đổi** (đúng như lý do đã ghi ở §2 — không phụ thuộc frame-score ingestion): `calibrate_frame_scores`, `generate_boundary_proposals`, `generate_profiled_proposals`, `proposal_profiles.py`, `FrameScoreSample`/`EventProposal` schema, `commands/fix-frame`, `GET /proposals`. `boundary_refinement.py` tự tính `FrameScoreSample` thô mỗi request rồi gọi thẳng `generate_profiled_proposals()` — không hề đọc/ghi `bundle.artifacts.frame_scores`.
+
+**Research tools cũng dọn theo:** `adaptive_full` (benchmark pipeline mode) bị xoá khỏi `tuple_runner.py`/`cli.py` — nó đã phụ thuộc `commands/refine`/`GET /tuples` (xoá ở §1) và giờ thêm cả các hyperparameter frontier vừa xoá, nên không còn cách nào chạy được. `research_tools/benchmarks/youcook2/legacy_clustering.py` (dùng cho ablation "clustered vs atomic" có sẵn từ trước) định nghĩa `ClusteringHyperparameters` cục bộ thay vì import từ `adaptive_search.schemas`.

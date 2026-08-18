@@ -4,7 +4,8 @@ Given any pipeline's already-chosen anchor timestamp for one event in one
 video, look at real native-fps neighbors (+/-`radius_frames`) and use the
 existing contrastive pre/post-state change-point detector to snap onto the
 true onset/offset - instead of the expensive mid-pipeline frontier-wide
-refine that only `adaptive_full` runs today.
+refine that only the now-removed `adaptive_full` pipeline used to run (see
+docs/ADAPTIVE_PIPELINE_MIGRATION.md).
 
 Reuses the existing dense-scoring/change-point machinery in
 `adaptive_search` as-is (`score_event_frames`, `calibrate_frame_scores`,

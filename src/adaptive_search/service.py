@@ -5,12 +5,7 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, Iterable
 
-from .algorithms import (
-    atomic_regions,
-    calibrate_frame_scores,
-    prioritize_videos,
-    select_refinement_frontier,
-)
+from .algorithms import atomic_regions
 from .exceptions import AdaptiveInputError
 from .invalidation import (
     changed_paths,
@@ -22,13 +17,11 @@ from .schemas import (
     EventConstraint,
     EventDefinition,
     EventProposal,
-    FrameScoreSample,
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
 )
 from .providers import FrameProvider, UnavailableFrameProvider
-from .proposal_profiles import generate_profiled_proposals
 from .retrieval import fuse_candidates_rrf
 from .service_helpers import (
     _clear_fixed_proposal_status,
@@ -36,12 +29,11 @@ from .service_helpers import (
     _deep_merge,
     _ensure_unique_ids,
     _event_index,
-    _frame_score_acceptance_window,
     _invalidate_artifacts,
-    _rebuild_frontier,
     _rebuild_reusable_artifacts,
     _require_revision,
     _validate_constraints_for_events,
+    _validate_event_relation_graph,
     _validate_event_subset,
     _validate_retrieval_variants,
 )
@@ -77,6 +69,7 @@ class AdaptiveSearchService:
     ) -> SessionBundle:
         selected_constraints = constraints or SearchConstraints()
         _validate_constraints_for_events(events, selected_constraints)
+        _validate_event_relation_graph(events)
         selected_variants = dict(retrieval_variants or {})
         _validate_retrieval_variants(events, selected_variants)
         return self.repository.create(
@@ -202,8 +195,6 @@ class AdaptiveSearchService:
             _validate_constraints_for_events(bundle.session.events, constraints)
             bundle.session.constraints = constraints.model_copy(deep=True)
             bundle.session.last_invalidated_stages = invalidated
-            if video_scope_changed:
-                _rebuild_frontier(bundle)
 
         return (
             self.repository.mutate(session_id, expected_revision, mutate),
@@ -235,7 +226,7 @@ class AdaptiveSearchService:
             snapshot.session.hyperparameters.retrieval,
         )
 
-        run = new_run(snapshot, ["retrieval", "region", "frontier"])
+        run = new_run(snapshot, ["retrieval", "region"])
         started = perf_counter()
 
         def commit(bundle: SessionBundle) -> None:
@@ -246,33 +237,10 @@ class AdaptiveSearchService:
             ]
             bundle.artifacts.candidates = [*retained, *fused_candidates]
             # atomic_regions, not cluster_temporal_regions - see that
-            # function's docstring (algorithms.py) for why merging candidates
-            # was dropped. Zero-width (no margin) - ranking and refinement
-            # never read region span, and the one consumer that does
-            # (replace_frame_scores) now computes its own scoped, guarded
-            # margin at validation time instead of reading a pre-padded span
-            # every region used to carry for that one feature's sake.
+            # function's docstring (algorithms/regions.py) for why merging
+            # candidates was dropped. Zero-width (no margin) - ranking and
+            # live boundary refinement never read region span.
             bundle.artifacts.regions = atomic_regions(bundle.artifacts.candidates)
-            event_order = [event.event_id for event in bundle.session.events]
-            priorities = prioritize_videos(
-                bundle.artifacts.regions,
-                event_order,
-                bundle.session.hyperparameters.refinement,
-                bundle.session.constraints,
-            )
-            frontier = select_refinement_frontier(
-                bundle.artifacts.regions,
-                priorities,
-                event_order,
-                bundle.session.hyperparameters.refinement,
-                bundle.session.constraints,
-            )
-            bundle.artifacts.frontier_region_ids = [item.id for item in frontier]
-            bundle.artifacts.frame_scores = [
-                item
-                for item in bundle.artifacts.frame_scores
-                if item.event_id not in replaced_events
-            ]
             bundle.artifacts.proposals = [
                 item
                 for item in bundle.artifacts.proposals
@@ -282,7 +250,6 @@ class AdaptiveSearchService:
             bundle.session.last_invalidated_stages = [
                 "retrieval",
                 "region",
-                "frontier",
                 "refinement",
                 "proposal",
                 "tuple",
@@ -293,100 +260,7 @@ class AdaptiveSearchService:
                 input_candidates=len(candidates),
                 fused_candidates=len(bundle.artifacts.candidates),
                 regions=len(bundle.artifacts.regions),
-                frontier_regions=len(frontier),
             )
-            bundle.runs.append(completed)
-
-        result = self.repository.commit_run(session_id, expected_revision, commit)
-        return result, result.runs[-1]
-
-    def replace_frame_scores(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        region_ids: Iterable[str],
-        samples: list[FrameScoreSample],
-        run_metrics: dict[str, int | float | str | bool | None] | None = None,
-    ) -> tuple[SessionBundle, SearchRun]:
-        snapshot = self.repository.get(session_id)
-        _require_revision(snapshot, expected_revision)
-        replaced_regions = set(region_ids)
-        if not replaced_regions:
-            raise AdaptiveInputError("region_ids must not be empty")
-        known_regions = {region.id: region for region in snapshot.artifacts.regions}
-        missing = replaced_regions - set(known_regions)
-        if missing:
-            raise AdaptiveInputError(f"unknown region_ids: {sorted(missing)}")
-        sampled_regions: set[str] = set()
-        for sample in samples:
-            if sample.session_id != session_id:
-                raise AdaptiveInputError("frame score session_id does not match URL")
-            if sample.region_id not in replaced_regions:
-                raise AdaptiveInputError(
-                    "frame score region_id must be listed in replaced region_ids"
-                )
-            region = known_regions[sample.region_id]
-            if (
-                sample.event_id != region.event_id
-                or sample.video_id != region.video_id
-            ):
-                raise AdaptiveInputError(
-                    "frame score event/video must match its temporal region"
-                )
-            window_start, window_end = _frame_score_acceptance_window(
-                region,
-                snapshot.artifacts.regions,
-                snapshot.session.hyperparameters.clustering.margin_seconds,
-            )
-            if not (window_start <= sample.timestamp_seconds <= window_end):
-                raise AdaptiveInputError("frame score timestamp lies outside its region")
-            sampled_regions.add(sample.region_id)
-        regions_without_samples = replaced_regions - sampled_regions
-        if regions_without_samples:
-            raise AdaptiveInputError(
-                "each replaced region must have at least one frame score sample: "
-                f"{sorted(regions_without_samples)}"
-            )
-
-        run = new_run(snapshot, ["refinement", "proposal", "tuple"])
-        started = perf_counter()
-        supplied_run_metrics = dict(run_metrics or {})
-
-        def commit(bundle: SessionBundle) -> None:
-            retained = [
-                item
-                for item in bundle.artifacts.frame_scores
-                if item.region_id not in replaced_regions
-            ]
-            calibrated = calibrate_frame_scores(
-                samples,
-                bundle.session.hyperparameters.boundary,
-            )
-            bundle.artifacts.frame_scores = [*retained, *calibrated]
-            bundle.artifacts.regions = [
-                region.model_copy(update={"refinement_status": "completed"})
-                if region.id in replaced_regions
-                else region
-                for region in bundle.artifacts.regions
-            ]
-            bundle.artifacts.proposals = generate_profiled_proposals(
-                bundle.session.events,
-                bundle.artifacts.frame_scores,
-                bundle.session.hyperparameters.boundary,
-            )
-            bundle.session.status = "completed"
-            bundle.session.last_invalidated_stages = [
-                "refinement",
-                "proposal",
-                "tuple",
-            ]
-            completed_metrics = {
-                **supplied_run_metrics,
-                "frame_scores": len(bundle.artifacts.frame_scores),
-                "proposals": len(bundle.artifacts.proposals),
-            }
-            completed = _complete_run(run, started, **completed_metrics)
             bundle.runs.append(completed)
 
         result = self.repository.commit_run(session_id, expected_revision, commit)
@@ -409,22 +283,6 @@ class AdaptiveSearchService:
             payload["allowed_video_ids"] = allowed
             bundle.session.constraints = SearchConstraints.model_validate(payload)
             bundle.session.last_invalidated_stages = invalidated
-            # Existing proposals are reusable.  A live provider may lazily refine
-            # missing regions before this synchronous rebuild.
-            priorities = prioritize_videos(
-                bundle.artifacts.regions,
-                [event.event_id for event in bundle.session.events],
-                bundle.session.hyperparameters.refinement,
-                bundle.session.constraints,
-            )
-            frontier = select_refinement_frontier(
-                bundle.artifacts.regions,
-                priorities,
-                [event.event_id for event in bundle.session.events],
-                bundle.session.hyperparameters.refinement,
-                bundle.session.constraints,
-            )
-            bundle.artifacts.frontier_region_ids = [item.id for item in frontier]
 
         return (
             self.repository.mutate(session_id, expected_revision, mutate),
@@ -496,49 +354,6 @@ class AdaptiveSearchService:
                 }
             )
             event_constraints[event_id] = current
-            constraints_payload["event_constraints"] = event_constraints
-            bundle.session.constraints = SearchConstraints.model_validate(
-                constraints_payload
-            )
-            bundle.session.last_invalidated_stages = invalidated
-
-        return (
-            self.repository.mutate(session_id, expected_revision, mutate),
-            invalidated,
-        )
-
-    def reject_proposal(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        event_id: str,
-        proposal_id: str,
-    ) -> tuple[SessionBundle, list[str]]:
-        invalidated = invalidated_for_constraint("reject_proposal")
-
-        def mutate(bundle: SessionBundle) -> None:
-            _event_index(bundle, event_id)
-            proposal = next(
-                (
-                    item
-                    for item in bundle.artifacts.proposals
-                    if item.id == proposal_id and item.event_id == event_id
-                ),
-                None,
-            )
-            if proposal is None:
-                raise AdaptiveInputError("proposal does not exist for this event")
-            constraints_payload = bundle.session.constraints.model_dump()
-            event_constraints = dict(constraints_payload["event_constraints"])
-            current = EventConstraint.model_validate(
-                event_constraints.get(event_id, {})
-            )
-            current_payload = current.model_dump()
-            current_payload["rejected_proposal_ids"] = frozenset(
-                {*current.rejected_proposal_ids, proposal_id}
-            )
-            event_constraints[event_id] = current_payload
             constraints_payload["event_constraints"] = event_constraints
             bundle.session.constraints = SearchConstraints.model_validate(
                 constraints_payload

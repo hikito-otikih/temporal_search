@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from time import perf_counter
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
-from .algorithms import atomic_regions, prioritize_videos, select_refinement_frontier
+from .algorithms import atomic_regions
 from .exceptions import AdaptiveInputError, RevisionConflictError
-from .proposal_profiles import generate_profiled_proposals
-from .schemas import EventDefinition, SearchConstraints, TemporalRegion
+from .schemas import EventDefinition, SearchConstraints
 from .session import SearchRun, SessionBundle, utc_now
 
 
@@ -56,6 +55,63 @@ def _validate_constraints_for_events(
             raise AdaptiveInputError(
                 "gap constraints must reference adjacent events in forward order"
             )
+
+
+def _validate_event_relation_graph(events: list[EventDefinition]) -> None:
+    """Reject a session whose events' `temporal_relation`/`reference_event_id`
+    edges contain a dangling reference or a cycle.
+
+    `build_order_constraints` (tuple_ranking.py) builds the exact same edge
+    set from these two fields and silently drops a dangling reference (no
+    edge, no error) - left unvalidated, a typo'd `reference_event_id` just
+    quietly loses its ordering constraint instead of failing loudly at
+    session creation, the only place it can still be corrected. A cycle is
+    worse: `build_order_constraints`'s transitive closure turns e.g. a
+    two-event mutual "before" cycle into self-edges `(0,0)` and `(1,1)`,
+    and `_order_score` can never satisfy `timestamps[i] > timestamps[i]` -
+    every video's order score for that event permanently loses points with
+    no way to fix it short of deleting the session, since nothing else in
+    the pipeline can express or repair a self-precedence constraint."""
+
+    known = {event.event_id for event in events}
+    edges: list[tuple[str, str]] = []
+    for event in events:
+        reference = event.reference_event_id
+        if reference is None:
+            continue
+        if reference not in known:
+            raise AdaptiveInputError(
+                f"event {event.event_id!r} references unknown "
+                f"reference_event_id {reference!r}"
+            )
+        if event.temporal_relation == "after":
+            edges.append((reference, event.event_id))
+        elif event.temporal_relation == "before":
+            edges.append((event.event_id, reference))
+        # "during" / "simultaneous": no edge - matches build_order_constraints.
+
+    adjacency: dict[str, list[str]] = {event_id: [] for event_id in known}
+    for predecessor, successor in edges:
+        adjacency[predecessor].append(successor)
+
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {event_id: WHITE for event_id in known}
+
+    def visit(node: str, path: list[str]) -> None:
+        color[node] = GRAY
+        for neighbor in adjacency[node]:
+            if color[neighbor] == GRAY:
+                cycle = " -> ".join([*path, neighbor])
+                raise AdaptiveInputError(
+                    f"event temporal relations contain a cycle: {cycle}"
+                )
+            if color[neighbor] == WHITE:
+                visit(neighbor, [*path, neighbor])
+        color[node] = BLACK
+
+    for event_id in known:
+        if color[event_id] == WHITE:
+            visit(event_id, [event_id])
 
 
 def _validate_event_subset(bundle: SessionBundle, event_ids: set[str]) -> None:
@@ -118,45 +174,13 @@ def _invalidate_artifacts(
             item for item in bundle.artifacts.candidates if keep_event(item)
         ]
     if "region" in stages:
-        removed_region_ids = {
-            item.id for item in bundle.artifacts.regions if not keep_event(item)
-        }
         bundle.artifacts.regions = [
             item for item in bundle.artifacts.regions if keep_event(item)
-        ]
-        bundle.artifacts.frontier_region_ids = [
-            region_id
-            for region_id in bundle.artifacts.frontier_region_ids
-            if region_id not in removed_region_ids
-        ]
-    if "frontier" in stages:
-        bundle.artifacts.frontier_region_ids = []
-    if "refinement" in stages:
-        bundle.artifacts.frame_scores = [
-            item for item in bundle.artifacts.frame_scores if keep_event(item)
         ]
     if "proposal" in stages:
         bundle.artifacts.proposals = [
             item for item in bundle.artifacts.proposals if keep_event(item)
         ]
-
-
-def _rebuild_frontier(bundle: SessionBundle) -> None:
-    event_order = [event.event_id for event in bundle.session.events]
-    priorities = prioritize_videos(
-        bundle.artifacts.regions,
-        event_order,
-        bundle.session.hyperparameters.refinement,
-        bundle.session.constraints,
-    )
-    frontier = select_refinement_frontier(
-        bundle.artifacts.regions,
-        priorities,
-        event_order,
-        bundle.session.hyperparameters.refinement,
-        bundle.session.constraints,
-    )
-    bundle.artifacts.frontier_region_ids = [item.id for item in frontier]
 
 
 def _rebuild_reusable_artifacts(
@@ -166,48 +190,12 @@ def _rebuild_reusable_artifacts(
     # "region" is a pure, local function of bundle.artifacts.candidates - no
     # upstream call needed, unlike "retrieval" - so it can and should be
     # rebuilt right here instead of left empty until a fresh
-    # commands/retrieve. Without this, a clustering.* patch (mapped to
-    # "region") invalidated regions and never rebuilt them: 200 OK, but
-    # every subsequent /video-priorities, /regions, and .../frame-scores
-    # call broke until the caller manually re-ran retrieve from scratch.
+    # commands/retrieve. Without this, a patch that invalidated regions
+    # never rebuilt them: 200 OK, but every subsequent /video-priorities and
+    # /regions call broke until the caller manually re-ran retrieve from
+    # scratch.
     if "region" in invalidated:
         bundle.artifacts.regions = atomic_regions(bundle.artifacts.candidates)
-    if "proposal" in invalidated and "refinement" not in invalidated:
-        bundle.artifacts.proposals = generate_profiled_proposals(
-            bundle.session.events,
-            bundle.artifacts.frame_scores,
-            bundle.session.hyperparameters.boundary,
-        )
-
-
-def _frame_score_acceptance_window(
-    region: TemporalRegion,
-    all_regions: Sequence[TemporalRegion],
-    margin_seconds: float,
-) -> tuple[float, float]:
-    """The timestamp window a `replace_frame_scores` sample must fall within
-    to count as evidence for `region`'s event.
-
-    Anchored on the region's own representative timestamp (span midpoint -
-    exact for a zero-width region, the production default; a reasonable
-    center for a wider one) and padded by `margin_seconds` on each side, but
-    never past the midpoint to the nearest region belonging to a *different*
-    event in the same video. Without that cap, a wide margin could accept a
-    frame that legitimately belongs to a neighboring event as if it were
-    evidence for this one - not a hypothetical: 25% of top-ranked videos on
-    the real n=60 corpus have two different events landing on the same or
-    near-same timestamp (region_tuple_ranking_results.md). This is the only
-    place region width/margin is computed in the pipeline - ranking and
-    refinement never read it (see `algorithms/regions.py::atomic_regions`)."""
-
-    anchor = (region.start_seconds + region.end_seconds) / 2.0
-    effective_margin = margin_seconds
-    for other in all_regions:
-        if other.video_id != region.video_id or other.event_id == region.event_id:
-            continue
-        other_anchor = (other.start_seconds + other.end_seconds) / 2.0
-        effective_margin = min(effective_margin, abs(other_anchor - anchor) / 2.0)
-    return (anchor - effective_margin, anchor + effective_margin)
 
 
 def _complete_run(

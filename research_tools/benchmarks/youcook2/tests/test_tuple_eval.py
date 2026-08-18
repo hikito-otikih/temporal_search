@@ -50,8 +50,6 @@ class GroupedParsingTests(unittest.TestCase):
 class FakeBackendHandler(BaseHTTPRequestHandler):
     legacy_results: list[dict[str, object]] = []
     video_priorities: list[dict[str, object]] = []
-    tuples: list[dict[str, object]] = []
-    refine_available = True
     requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def log_message(self, *_args: object) -> None:
@@ -73,8 +71,6 @@ class FakeBackendHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlsplit(self.path).path
         if path.endswith("/video-priorities"):
             self._json({"items": self.video_priorities, "total": len(self.video_priorities), "offset": 0, "limit": 100})
-        elif path.endswith("/tuples"):
-            self._json({"items": self.tuples, "total": len(self.tuples), "offset": 0, "limit": 20})
         else:
             self._json({"detail": "not found"}, 404)
 
@@ -95,14 +91,6 @@ class FakeBackendHandler(BaseHTTPRequestHandler):
             )
         elif self.path.endswith("/commands/retrieve"):
             self._json({"session_revision": 1, "run_id": "r1", "run_status": "completed", "metrics": {}, "artifact_counts": {}})
-        elif self.path.endswith("/commands/refine"):
-            if self.refine_available:
-                self._json({"session_revision": 2, "run_id": "r2", "run_status": "completed", "metrics": {}, "artifact_counts": {}})
-            else:
-                self._json(
-                    {"detail": {"code": "live_refinement_unavailable", "message": "no frame provider configured"}},
-                    503,
-                )
         else:
             self._json({"detail": "not found"}, 404)
 
@@ -123,7 +111,6 @@ class TupleRunnerTests(unittest.TestCase):
 
     def setUp(self) -> None:
         FakeBackendHandler.requests = []
-        FakeBackendHandler.refine_available = True
 
     def _config(self, pipeline: str, **overrides) -> TupleRunConfig:
         return TupleRunConfig(
@@ -206,65 +193,6 @@ class TupleRunnerTests(unittest.TestCase):
         self.assertTrue(any(path.endswith("/video-priorities") for path in paths))
         self.assertFalse(any(path.endswith("/commands/refine") for path in paths))
 
-    def test_adaptive_full_records_unavailable_without_error(self) -> None:
-        FakeBackendHandler.refine_available = False
-        group = self._group()
-        with tempfile.TemporaryDirectory() as output_dir:
-            metrics, rows = run_tuple_benchmark(
-                [group],
-                output_dir,
-                self._config("adaptive_full"),
-                {"type": "fixture"},
-                "digest",
-                progress_every=0,
-            )
-        self.assertEqual(rows[0]["status"], "unavailable")
-        self.assertIn("no frame provider configured", rows[0]["unavailable_reason"])
-        self.assertEqual(metrics["unavailable_count"], 1)
-        self.assertEqual(metrics["query_count"], 0)  # excluded from recall/MRR denominator
-
-    def test_adaptive_full_ranks_tuples_when_available(self) -> None:
-        group = self._group()
-        FakeBackendHandler.tuples = [
-            {
-                "video_id": "ground-truth",
-                "normalized_final_score": 0.7,
-                "proposals": [
-                    {"event_id": "E1", "timestamp_seconds": 15.0},
-                    {"event_id": "E2", "timestamp_seconds": 35.0},
-                ],
-            },
-        ]
-        with tempfile.TemporaryDirectory() as output_dir:
-            metrics, rows = run_tuple_benchmark(
-                [group],
-                output_dir,
-                self._config("adaptive_full"),
-                {"type": "fixture"},
-                "digest",
-                progress_every=0,
-            )
-        self.assertEqual(rows[0]["status"], "ok")
-        self.assertEqual(rows[0]["rank"], 1)
-        self.assertEqual(rows[0]["event_timestamp_accuracy"], {"E1": True, "E2": True})
-        self.assertEqual(metrics["recall_at_1"], 1.0)
-
-    def test_adaptive_ranking_top_k_overrides_session_hyperparameters(self) -> None:
-        group = self._group()
-        with tempfile.TemporaryDirectory() as output_dir:
-            run_tuple_benchmark(
-                [group],
-                output_dir,
-                self._config("adaptive_full", adaptive_ranking_top_k=100),
-                {"type": "fixture"},
-                "digest",
-                progress_every=0,
-            )
-        payload = next(
-            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
-        )
-        self.assertEqual(payload["hyperparameters"], {"ranking": {"top_k": 100}})
-
     def test_adaptive_ranking_top_k_caps_video_priorities_page_for_coarse(self) -> None:
         group = self._group()
         with tempfile.TemporaryDirectory() as output_dir:
@@ -315,31 +243,6 @@ class TupleRunnerTests(unittest.TestCase):
         )
         self.assertNotIn("ranking", payload["hyperparameters"])
 
-    def test_adaptive_full_sends_frontier_overrides_alongside_ranking(self) -> None:
-        group = self._group()
-        with tempfile.TemporaryDirectory() as output_dir:
-            run_tuple_benchmark(
-                [group],
-                output_dir,
-                self._config(
-                    "adaptive_full",
-                    adaptive_ranking_top_k=50,
-                    adaptive_max_initial_videos=20,
-                    adaptive_max_total_regions=300,
-                ),
-                {"type": "fixture"},
-                "digest",
-                progress_every=0,
-            )
-        payload = next(
-            item for method, path, item in FakeBackendHandler.requests if path == "/v1/search-sessions"
-        )
-        self.assertEqual(payload["hyperparameters"]["ranking"], {"top_k": 50})
-        self.assertEqual(
-            payload["hyperparameters"]["refinement"],
-            {"max_initial_videos": 20, "max_total_regions": 300},
-        )
-
     def test_adaptive_coarse_does_not_send_ranking_hyperparameters(self) -> None:
         group = self._group()
         with tempfile.TemporaryDirectory() as output_dir:
@@ -356,25 +259,27 @@ class TupleRunnerTests(unittest.TestCase):
         )
         self.assertNotIn("hyperparameters", payload)
 
-    def test_resume_skips_completed_and_unavailable_groups(self) -> None:
-        FakeBackendHandler.refine_available = False
+    def test_resume_skips_completed_groups(self) -> None:
         group = self._group()
+        FakeBackendHandler.video_priorities = [
+            {"video_id": "ground-truth", "priority_score": 0.9, "event_coverage": 2, "normalized_coverage": 1.0, "mean_best_event_score": 0.9, "min_best_event_score": 0.9},
+        ]
         with tempfile.TemporaryDirectory() as output_dir:
             run_tuple_benchmark(
-                [group], output_dir, self._config("adaptive_full"), {"type": "fixture"}, "digest", progress_every=0
+                [group], output_dir, self._config("adaptive_coarse"), {"type": "fixture"}, "digest", progress_every=0
             )
             request_count = len(FakeBackendHandler.requests)
             metrics, rows = run_tuple_benchmark(
                 [group],
                 output_dir,
-                self._config("adaptive_full"),
+                self._config("adaptive_coarse"),
                 {"type": "fixture"},
                 "digest",
                 resume=True,
                 progress_every=0,
             )
             self.assertEqual(len(FakeBackendHandler.requests), request_count)
-            self.assertEqual(rows[0]["status"], "unavailable")
+            self.assertEqual(rows[0]["status"], "ok")
             for artifact in ("query_results.jsonl", "query_results.csv", "metrics.json", "run_manifest.json"):
                 self.assertTrue((Path(output_dir) / artifact).is_file())
 

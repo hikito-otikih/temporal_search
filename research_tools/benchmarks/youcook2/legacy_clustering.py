@@ -14,15 +14,33 @@ and population-relative score normalization helpers directly
 this stays a faithful comparison arm, not a parallel reimplementation that
 could quietly drift from what production actually did before atomic regions
 replaced it.
+
+`ClusteringHyperparameters` is defined here rather than imported from
+`adaptive_search.schemas` - production removed that class entirely once
+`atomic_regions` (its only remaining, zero-parameter region-formation
+function) made every one of its three fields dead weight; this module still
+needs the same three values to reproduce the retired "clustered" arm.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Sequence
 
 from adaptive_search.algorithms import _candidate_normalized_scores_by_event, _stable_id
-from adaptive_search.schemas import ClusteringHyperparameters, SparseCandidate, TemporalRegion
+from adaptive_search.schemas import SparseCandidate, TemporalRegion
+
+
+@dataclass(frozen=True)
+class ClusteringHyperparameters:
+    gap_seconds: float = 3.0
+    margin_seconds: float = 3.0
+    max_region_seconds: float = 30.0
+
+    def __post_init__(self) -> None:
+        if self.max_region_seconds < 2.0 * self.margin_seconds:
+            raise ValueError("max_region_seconds must be >= 2 * margin_seconds")
 
 
 def cluster_temporal_regions(

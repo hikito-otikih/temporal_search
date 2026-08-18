@@ -17,7 +17,6 @@ from components.keyframe_picker import render_keyframe_picker
 from components.region_timeline import render_region_table, render_region_timeline
 from components.score_curves import render_score_curves
 from models.ui_models import format_timestamp
-from services.api_client import ApiError
 from state import keys as K
 from state import session_state as SS
 
@@ -113,7 +112,12 @@ with tab_video:
     )
 
 with tab_curves:
-    samples = _load_samples(session_id, region.get("id"))
+    # GET .../frame-scores was retired along with session-level frame-score
+    # ingestion (see docs/ADAPTIVE_PIPELINE_MIGRATION.md) - no code path can
+    # ever populate samples for a region anymore, so render_score_curves'
+    # own "No frame-score samples for this region" empty state below is the
+    # permanent, correct outcome here.
+    samples: list[dict[str, Any]] = []
     proposals = client.get_proposals(session_id, event_id=event_id, limit=200).get("items", [])
     region_proposals = [p for p in proposals if p.get("region_id") == region.get("id")]
     show_raw = st.checkbox("Show raw score overlay", value=False, key="show_raw_curves")
@@ -156,14 +160,6 @@ def _fix_frame(frame_id: int, timestamp_seconds: float, region_id: str | None) -
     else:
         st.info(f"Fixed frame {frame_id} @ {timestamp_seconds}s: invalidated {result.invalidated_stages}")
         SS.refresh_session(st.session_state, client)
-
-
-def _load_samples(session_id: str, region_id: str) -> list[dict[str, Any]]:
-    try:
-        page = client.get_frame_scores(session_id, region_id=region_id, limit=2000)
-        return page.get("items", [])
-    except ApiError:
-        return []
 
 
 def _event_color(index: int) -> str:

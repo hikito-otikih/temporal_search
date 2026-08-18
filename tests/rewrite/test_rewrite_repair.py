@@ -123,6 +123,25 @@ class EnglishEchoValidationTests(unittest.TestCase):
         with self.assertRaises(SemanticValidationError):
             _validate_standalone_context(analysis, common_query)
 
+    def test_english_query_left_in_vietnamese_is_rejected(self) -> None:
+        # Regression test for a real reported bug: only a byte-identical
+        # echo of original_query was rejected, so an LLM that paraphrased
+        # (rather than translated) into Vietnamese - or just left the field
+        # in Vietnamese outright - passed validation and returned HTTP 200.
+        # This query is not identical to original_query, so the echo check
+        # alone would miss it; the Vietnamese-signature check catches it on
+        # script alone (chợ/hoa/lần/đầu/tiên all carry Vietnamese diacritics
+        # outside plain English text).
+        common_query = 'chợ hoa Tết'
+        analysis = _response(
+            retrieval_queries_en=[
+                'Con rồng cử động đầu tại khu chợ hoa lần đầu tiên.',
+                'A second, genuinely translated query.',
+            ],
+        )
+        with self.assertRaises(SemanticValidationError):
+            _validate_standalone_context(analysis, common_query)
+
     def test_genuinely_translated_english_query_passes(self) -> None:
         # original_query left at _event()'s default, which already contains
         # "chợ hoa" - matching target_moment_vi/anchor_query/retrieval_

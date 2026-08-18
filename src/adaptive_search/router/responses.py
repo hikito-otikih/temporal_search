@@ -106,8 +106,6 @@ def _counts(bundle: SessionBundle) -> ArtifactCounts:
     return ArtifactCounts(
         candidates=len(bundle.artifacts.candidates),
         regions=len(bundle.artifacts.regions),
-        frontier_regions=len(bundle.artifacts.frontier_region_ids),
-        frame_scores=len(bundle.artifacts.frame_scores),
         proposals=len(bundle.artifacts.proposals),
         runs=len(bundle.runs),
     )

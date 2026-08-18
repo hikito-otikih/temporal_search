@@ -498,6 +498,69 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.model_dump(), expected)
         self.assertEqual(request_count, 2)
 
+    async def test_retries_once_after_a_timeout(self) -> None:
+        # Regression test for a real reported bug: the timeout branch used
+        # to raise OllamaTimeoutError on the very first occurrence, never
+        # honoring the same MAX_TRANSPORT_ATTEMPTS=2 budget the connection-
+        # error and generic-HTTP-error branches already retry under.
+        query = 'Một sự kiện.'
+        expected = analysis_payload([query])
+        request_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                raise httpx.ReadTimeout('too slow', request=request)
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(expected, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(request_count, 2)
+
+    async def test_retries_once_after_a_rate_limit(self) -> None:
+        # Same bug, the 429 branch: raised immediately instead of retrying.
+        query = 'Một sự kiện.'
+        expected = analysis_payload([query])
+        request_count = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal request_count
+            request_count += 1
+            if request_count == 1:
+                return httpx.Response(429, json={'error': 'too many requests'})
+            return httpx.Response(
+                200,
+                json={
+                    'message': {
+                        'content': json.dumps(expected, ensure_ascii=False)
+                    }
+                },
+            )
+
+        result = await rewrite_queries(
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(request_count, 2)
+
     async def test_missing_api_key_raises_before_request(self) -> None:
         called = False
 

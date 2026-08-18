@@ -8,6 +8,8 @@ from pydantic import TypeAdapter
 
 from .schemas import QueryResponse
 
+UPSTREAM_SEARCH_TIMEOUT_SECONDS = 30.0
+
 
 def upstream_search_url() -> str:
     """Base URL of the frame-search API, overridable via env var.
@@ -42,7 +44,7 @@ def _search_one(query: str, top_k: int) -> QueryResponse:
         method="POST",
     )
 
-    with request.urlopen(req) as response:
+    with request.urlopen(req, timeout=UPSTREAM_SEARCH_TIMEOUT_SECONDS) as response:
         body = response.read().decode("utf-8")
         return TypeAdapter(QueryResponse).validate_python(json.loads(body))
 

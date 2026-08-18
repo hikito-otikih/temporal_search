@@ -16,28 +16,26 @@ def atomic_regions(
     ever - zero-width by default (`start_seconds == end_seconds ==
     candidate.timestamp_seconds`).
 
-    The production region-formation path (`service.py::retrieve_candidates`,
-    called with no margin - true zero-width). Merged-candidate clustering
-    (`research_tools/benchmarks/youcook2/legacy_clustering.py`, relocated
-    out of this module once nothing in production called it any more) was
-    verified, not assumed, to have zero effect on
-    `prioritize_videos()` and `select_event_seeds()` (each reduces to "the
-    single best-scoring raw candidate," an identity merging can regroup but
-    not change - every (event, video) pair's top seed was byte-identical
-    between clustered and atomic input across a real n=60 corpus) and a
-    small net *positive* for order-aware tuple ranking
+    The production region-formation path (`service.py::AdaptiveSearchService.
+    replace_candidates`, called with no margin - true zero-width).
+    Merged-candidate clustering (`research_tools/benchmarks/youcook2/
+    legacy_clustering.py`, relocated out of this module once nothing in
+    production called it any more) was verified, not assumed, to have zero
+    effect on `prioritize_videos()` and `select_event_seeds()` (each reduces
+    to "the single best-scoring raw candidate," an identity merging can
+    regroup but not change - every (event, video) pair's top seed was
+    byte-identical between clustered and atomic input across a real n=60
+    corpus) and a small net *positive* for order-aware tuple ranking
     (`region_tuple_ranking_results.md`) - `_region_timestamp`
     (`tuple_ranking.py`) and `select_event_seeds` both read only a region's
     member candidates' own `timestamp_seconds`, never
     `start_seconds`/`end_seconds`, so region width was never doing anything
-    for either. `replace_frame_scores` is the one exception - it needs a
-    real acceptance window around a region's timestamp, but that window is
-    now computed at validation time by `service.py::_frame_score_
-    acceptance_window` (margin applied there, with a cross-event-overlap
-    guard) rather than baked into every region up front via this
-    function's `margin_seconds` parameter, which exists for callers that
-    genuinely want padded regions (e.g. direct benchmark use) but is not
-    how production constructs them.
+    for either, including the one former exception (`replace_frame_scores`'s
+    acceptance-window check) - that endpoint and its window logic were
+    removed entirely (see docs/ADAPTIVE_PIPELINE_MIGRATION.md, 2026-08-18).
+    `margin_seconds` remains here for callers that genuinely want padded
+    regions (e.g. direct benchmark use) but is not how production constructs
+    them.
     """
 
     normalized_by_id = _candidate_normalized_scores_by_event(candidates)

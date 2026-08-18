@@ -5,12 +5,12 @@ function here consumes validated domain objects, has deterministic tie
 breaks, and can be tested without a GPU, a model download, or network
 access.
 
-Split by concern: scoring.py (robust normalization, calibration, the
-population-relative score maps everything else builds on), constraints.py
-(Stage 6 filtering, shared with tuple_ranking.py), regions.py (temporal
-region formation), proposals.py (boundary proposal generation + temporal
-NMS), ranking.py (independent per-event video ranking + refinement frontier
-selection). This module re-exports everything so `from adaptive_search.
+Split by concern: scoring.py (robust normalization, the population-relative
+score maps everything else builds on), constraints.py (Stage 6 filtering,
+shared with tuple_ranking.py), regions.py (temporal region formation),
+proposals.py (boundary proposal generation + temporal NMS), ranking.py
+(independent per-event video ranking). This module re-exports everything so
+`from adaptive_search.
 algorithms import X` (or `from .algorithms import X` within the package)
 keeps working unchanged - existing callers and tests reference the flat
 module path, some down to private helpers like `_region_allowed` and
@@ -30,7 +30,6 @@ from .ranking import (
     _min_pairwise_gap_seconds,
     distinctness_from_timestamps,
     prioritize_videos,
-    select_refinement_frontier,
 )
 from .regions import atomic_regions
 from .scoring import (
@@ -55,6 +54,5 @@ __all__ = [
     "pairwise_softmax",
     "prioritize_videos",
     "robust_sigmoid",
-    "select_refinement_frontier",
     "temporal_nms",
 ]

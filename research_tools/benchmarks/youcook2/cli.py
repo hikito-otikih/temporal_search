@@ -141,7 +141,7 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     )
     tuple_run.add_argument(
         "--pipeline",
-        choices=("legacy_temporal", "legacy_ambiguous", "adaptive_coarse", "adaptive_full"),
+        choices=("legacy_temporal", "legacy_ambiguous", "adaptive_coarse"),
         default=defaults.get("pipeline"),
     )
     tuple_run.add_argument(
@@ -154,25 +154,14 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
     tuple_run.add_argument("--gamma", type=float, default=defaults.get("gamma", 0.05))
     tuple_run.add_argument("--adaptive-top-k", type=int, default=defaults.get("adaptive_top_k", 20))
     tuple_run.add_argument(
-        "--adaptive-max-frames",
-        type=int,
-        default=defaults.get("adaptive_max_frames"),
-        help=(
-            "cap commands/refine's frame budget for adaptive_full (server default is "
-            "2000 across the whole frontier - real video decode + GPU embedding at that "
-            "scale can take minutes per session; try 100-400 for benchmark turnaround)"
-        ),
-    )
-    tuple_run.add_argument(
         "--adaptive-ranking-top-k",
         type=int,
         default=defaults.get("adaptive_ranking_top_k"),
         help=(
-            "cap the size of whichever ranked list the chosen --pipeline produces - "
+            "cap the size of the video-priorities page adaptive_coarse produces - "
             "independent of --adaptive-top-k (the raw per-variant retrieval cap). "
-            "adaptive_full: hyperparameters.ranking.top_k (server default 20). "
-            "adaptive_coarse: the video-priorities page limit (server default 100, "
-            "max 1000). No effect on legacy_temporal/legacy_ambiguous."
+            "Server default 100, max 1000. No effect on legacy_temporal/"
+            "legacy_ambiguous."
         ),
     )
     tuple_run.add_argument(
@@ -201,46 +190,19 @@ def build_parser(defaults: dict[str, Any] | None = None) -> argparse.ArgumentPar
         "--adaptive-video-coverage-weight",
         type=float,
         default=defaults.get("adaptive_video_coverage_weight"),
-        help="hyperparameters.refinement.video_coverage_weight for prioritize_videos() (server default 0.5).",
+        help="hyperparameters.refinement.video_coverage_weight, blended into GET .../video-priorities' priority_score (server default 0.0).",
     )
     tuple_run.add_argument(
         "--adaptive-video-mean-weight",
         type=float,
         default=defaults.get("adaptive_video_mean_weight"),
-        help="hyperparameters.refinement.video_mean_weight for prioritize_videos() (server default 0.3).",
+        help="hyperparameters.refinement.video_mean_weight, blended into GET .../video-priorities' priority_score (server default 1.0).",
     )
     tuple_run.add_argument(
         "--adaptive-video-min-weight",
         type=float,
         default=defaults.get("adaptive_video_min_weight"),
-        help="hyperparameters.refinement.video_min_weight for prioritize_videos() (server default 0.2).",
-    )
-    tuple_run.add_argument(
-        "--adaptive-max-initial-videos",
-        type=int,
-        default=defaults.get("adaptive_max_initial_videos"),
-        help=(
-            "hyperparameters.refinement.max_initial_videos - how many coarse-ranked "
-            "videos get full multi-region frontier coverage in adaptive_full "
-            "(server default 100). No effect on adaptive_coarse."
-        ),
-    )
-    tuple_run.add_argument(
-        "--adaptive-max-total-regions",
-        type=int,
-        default=defaults.get("adaptive_max_total_regions"),
-        help=(
-            "hyperparameters.refinement.max_total_regions - the actual budget "
-            "bottleneck behind --adaptive-max-initial-videos in adaptive_full; "
-            "raising videos without raising this does little. No effect on "
-            "adaptive_coarse."
-        ),
-    )
-    tuple_run.add_argument(
-        "--adaptive-max-regions-per-event",
-        type=int,
-        default=defaults.get("adaptive_max_regions_per_event_per_video"),
-        help="hyperparameters.refinement.max_regions_per_event_per_video for adaptive_full's frontier. No effect on adaptive_coarse.",
+        help="hyperparameters.refinement.video_min_weight, blended into GET .../video-priorities' priority_score (server default 0.0).",
     )
     tuple_run.add_argument(
         "--recall-k", type=_csv_ints, default=_csv_ints(defaults.get("recall_k", "1,5,10,20,50"))
@@ -367,7 +329,6 @@ def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         timeout_seconds=args.timeout,
         retries=args.retries,
         retry_backoff_seconds=args.retry_backoff,
-        adaptive_max_frames=args.adaptive_max_frames,
         adaptive_ranking_top_k=args.adaptive_ranking_top_k,
         adaptive_top_n_per_variant=args.adaptive_top_n_per_variant,
         adaptive_top_n_fused=args.adaptive_top_n_fused,
@@ -375,9 +336,6 @@ def _run_tuple_command(args: argparse.Namespace, parser: argparse.ArgumentParser
         adaptive_video_coverage_weight=args.adaptive_video_coverage_weight,
         adaptive_video_mean_weight=args.adaptive_video_mean_weight,
         adaptive_video_min_weight=args.adaptive_video_min_weight,
-        adaptive_max_initial_videos=args.adaptive_max_initial_videos,
-        adaptive_max_total_regions=args.adaptive_max_total_regions,
-        adaptive_max_regions_per_event_per_video=args.adaptive_max_regions_per_event,
     )
     metrics, _ = run_tuple_benchmark(
         groups=groups,

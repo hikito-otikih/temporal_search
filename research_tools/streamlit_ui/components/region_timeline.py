@@ -120,7 +120,6 @@ def render_region_table(regions: list[dict[str, Any]]) -> str | None:
                 "coarse_score": region.get("raw_coarse_score"),
                 "status": region.get("refinement_status"),
                 "user_status": region.get("user_status"),
-                "frontier": region.get("selected_for_refinement", False),
             }
         )
     import pandas as pd

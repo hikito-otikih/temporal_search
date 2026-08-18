@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..schemas import (
     BoundaryType,
     EventDefinition,
-    FrameScoreSample,
     SearchHyperparameters,
     SearchConstraints,
     SparseCandidate,
@@ -72,12 +71,6 @@ class CandidateIngestRequest(ApiModel):
     candidates: list[SparseCandidate]
 
 
-class FrameScoreIngestRequest(ApiModel):
-    expected_revision: int = Field(ge=0)
-    region_ids: list[str] = Field(min_length=1)
-    samples: list[FrameScoreSample] = Field(min_length=1)
-
-
 class RetrieveSessionRequest(ApiModel):
     top_k: int = Field(default=20, ge=1, le=10_000)
     event_ids: list[str] | None = Field(default=None, min_length=1)
@@ -97,12 +90,6 @@ class FixFrameRequest(ApiModel):
     region_id: str | None = Field(default=None, min_length=1)
 
 
-class RejectProposalRequest(ApiModel):
-    expected_revision: int = Field(ge=0)
-    event_id: str = Field(min_length=1)
-    proposal_id: str = Field(min_length=1)
-
-
 class ClearEventConstraintRequest(ApiModel):
     expected_revision: int = Field(ge=0)
     event_id: str = Field(min_length=1)
@@ -111,8 +98,6 @@ class ClearEventConstraintRequest(ApiModel):
 class ArtifactCounts(ApiModel):
     candidates: int
     regions: int
-    frontier_regions: int
-    frame_scores: int
     proposals: int
     runs: int
 

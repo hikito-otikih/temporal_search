@@ -69,10 +69,7 @@ class CapabilityResponse(UiModel):
 class ArtifactCounts(UiModel):
     candidates: int = 0
     regions: int = 0
-    frontier_regions: int = 0
-    frame_scores: int = 0
     proposals: int = 0
-    tuples: int = 0
     runs: int = 0
 
 
@@ -115,26 +112,19 @@ PageResponse = TypeAdapter(dict)
 def _balanced_preset() -> dict[str, Any]:
     return {
         "retrieval": {
-            "top_n_per_variant": 50,
-            "top_n_fused": 100,
+            "top_n_per_variant": 500,
+            "top_n_fused": 1000,
             "rrf_k": 60,
             "query_variants_per_event": 4,
-        },
-        "clustering": {
-            "gap_seconds": 3.0,
-            "margin_seconds": 3.0,
-            "max_region_seconds": 30.0,
         },
         "refinement": {
             "quality_profile_enabled": False,
             "use_reranker": False,
-            "max_initial_videos": 5,
-            "max_regions_per_event_per_video": 3,
-            "max_total_regions": 60,
-            "exploration_region_ratio": 0.15,
-            "video_coverage_weight": 0.5,
-            "video_mean_weight": 0.3,
-            "video_min_weight": 0.2,
+            "video_coverage_weight": 0.0,
+            "video_mean_weight": 1.0,
+            "video_min_weight": 0.0,
+            "video_distinctness_weight": 0.0,
+            "distinctness_norm_seconds": 3.0,
         },
         "boundary": {
             "window_options_seconds": [0.5, 1.0, 2.0, 3.0],
@@ -157,16 +147,20 @@ def _balanced_preset() -> dict[str, Any]:
 
 
 def _quality_preset() -> dict[str, Any]:
+    # use_reranker=True is deliberately not set here: the backend rejects it
+    # unconditionally (ValueError - "not supported until the ordered-frame
+    # reranker runtime is implemented"), so setting it made this preset 422
+    # on every Apply. quality_profile_enabled=True is the supported half of
+    # "quality" - it switches to quality_embedding_model.
     preset = _balanced_preset()
     preset["refinement"]["quality_profile_enabled"] = True
-    preset["refinement"]["use_reranker"] = True
     return preset
 
 
 def _paper_full_preset() -> dict[str, Any]:
     preset = _quality_preset()
-    preset["retrieval"]["top_n_per_variant"] = 100
-    preset["retrieval"]["top_n_fused"] = 200
+    preset["retrieval"]["top_n_per_variant"] = 1000
+    preset["retrieval"]["top_n_fused"] = 2000
     return preset
 
 

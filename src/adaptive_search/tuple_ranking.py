@@ -257,13 +257,17 @@ def assemble_region_tuples_for_video(
     invalidates the bound), not by lexicographic enumeration. This
     guarantees the up-to-`max_tuples_per_video` results returned are the
     true best found, not an artifact of enumeration order:
-    `max_combinations_per_video` bounds total search-node expansions, and if
+    `max_combinations_per_video` bounds total search-node expansions
+    (floored at `len(event_ids) + 1`, the minimum possible to ever produce
+    even one complete result - see the floor's own comment below), and if
     that cap is hit before finding enough valid (non-rejected) complete
     combinations, everything already found is still provably at least as
     good as anything left unexplored - never a low-scoring combination
     standing in for a much better one that entered the search space too
     late to be reached, which naive lexicographic truncation could not
-    guarantee.
+    guarantee. Ties in priority are broken in favor of depth (see the
+    heap-entry comment below), so a heavily-tied pool still reliably yields
+    results under a modest budget instead of exhausting it on width.
 
     A combination whose covered timestamps violate `constraints.
     max_tuple_span_seconds` or a hard `adjacent_gap_constraints` bound is
@@ -331,7 +335,7 @@ def assemble_region_tuples_for_video(
             region_scores=tuple(scores),
         )
 
-    # Heap entries: (-priority, tie_breaker, is_partial, payload).
+    # Heap entries: (-priority, -depth, tie_breaker, is_partial, payload).
     #
     # A *partial* entry's payload is (achieved_sum, selected-so-far) and its
     # priority is the still-optimistic upper_bound(). A *complete* entry's
@@ -350,32 +354,60 @@ def assemble_region_tuples_for_video(
     # first. Finalizing eagerly at push time (not at pop time) is what
     # makes this possible: a gap/span-violating combination is pruned right
     # here and never even enters the heap.
+    #
+    # `-depth` breaks ties among equal-priority entries in favor of the
+    # deeper (closer to complete) one - a pure tie-break, since it only
+    # applies once -priority already matches, so it cannot change which
+    # result best-first finds first when priorities differ. Without it, a
+    # heavily-tied pool (many candidates at the same score) degenerates
+    # into near-breadth-first expansion under heapq's FIFO tie-break: every
+    # sibling at a shallow level pops before any of them reaches depth n,
+    # so max_combinations_per_video can be exhausted expanding width with
+    # zero completed results even though hundreds of valid combinations
+    # exist. Preferring depth means the search commits to finishing one
+    # path before fanning out into the next, so a modest budget still
+    # reliably produces results under heavy ties. A complete entry's
+    # payload has no directly-stored depth, but it is always exactly `n`
+    # (finalize() only ever runs on a fully-selected tuple), which also
+    # correctly ranks a tied complete result above a same-priority partial
+    # one - a real find over a still-uncertain estimate.
     tie_breaker = count()
-    heap: list[tuple[float, int, bool, object]] = []
+    heap: list[tuple[float, int, int, bool, object]] = []
 
     def push(achieved_sum: float, index: int, selected: tuple[TemporalRegion | None, ...]) -> None:
         if index < n:
             heapq.heappush(
                 heap,
-                (-upper_bound(achieved_sum, index), next(tie_breaker), True, (achieved_sum, selected)),
+                (-upper_bound(achieved_sum, index), -index, next(tie_breaker), True, (achieved_sum, selected)),
             )
             return
         candidate = finalize(selected)
         if candidate is None:
             return  # gap/span violation - pruned, never enters the heap
-        heapq.heappush(heap, (-candidate.score, next(tie_breaker), False, candidate))
+        heapq.heappush(heap, (-candidate.score, -n, next(tie_breaker), False, candidate))
 
     push(0.0, 0, ())
+
+    # A floor beneath the configured cap: reaching even one complete result
+    # requires walking root-to-leaf (n pops, one per event) and then popping
+    # that finalized leaf itself (+1) - n+1 pops minimum, regardless of how
+    # good the search's ordering is. A caller-supplied cap smaller than that
+    # would make it structurally impossible to ever return a single result
+    # even when a valid combination plainly exists (e.g. cap=1 with any
+    # events at all), which is not "safely bounded," just silently empty.
+    # The configured cap otherwise still applies unchanged - this only
+    # raises a cap that was too small to ever succeed at all.
+    effective_max_combinations = max(params.max_combinations_per_video, n + 1)
 
     results: list[TupleRankingResult] = []
     expansions = 0
     while heap:
         if len(results) >= params.max_tuples_per_video:
             break
-        if expansions >= params.max_combinations_per_video:
+        if expansions >= effective_max_combinations:
             break
         expansions += 1
-        _, _, is_partial, payload = heapq.heappop(heap)
+        _, _, _, is_partial, payload = heapq.heappop(heap)
         if not is_partial:
             results.append(payload)  # already a finalized TupleRankingResult
             continue

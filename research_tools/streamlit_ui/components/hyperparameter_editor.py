@@ -59,15 +59,13 @@ def render_hyperparameter_editor(
     # tuple_ranking.* currently requires calling PATCH .../hyperparameters
     # directly; a real tab for it is a feature gap, not something this
     # cleanup pass added.
-    tabs = st.tabs(["Retrieval", "Clustering", "Refinement", "Boundary"])
+    tabs = st.tabs(["Retrieval", "Refinement", "Boundary"])
 
     with tabs[0]:
         _retrieval_tab(draft)
     with tabs[1]:
-        _clustering_tab(draft)
-    with tabs[2]:
         _refinement_tab(draft)
-    with tabs[3]:
+    with tabs[2]:
         _boundary_tab(draft)
 
     col1, col2, col3 = st.columns(3)
@@ -118,40 +116,27 @@ def _retrieval_tab(draft: dict[str, Any]) -> None:
     section = draft.setdefault("retrieval", {})
     c1, c2 = st.columns(2)
     with c1:
-        section["top_n_per_variant"] = int(_number("r", "top_n_per_variant", section.get("top_n_per_variant", 50), 1, 10_000, 1))
-        section["top_n_fused"] = int(_number("r", "top_n_fused", section.get("top_n_fused", 100), 1, 10_000, 1))
+        section["top_n_per_variant"] = int(_number("r", "top_n_per_variant", section.get("top_n_per_variant", 500), 1, 10_000, 1))
+        section["top_n_fused"] = int(_number("r", "top_n_fused", section.get("top_n_fused", 1000), 1, 10_000, 1))
     with c2:
         section["rrf_k"] = int(_number("r", "rrf_k", section.get("rrf_k", 60), 1, 10_000, 1))
         section["query_variants_per_event"] = int(_number("r", "query_variants_per_event", section.get("query_variants_per_event", 4), 1, 32, 1))
 
 
-def _clustering_tab(draft: dict[str, Any]) -> None:
-    section = draft.setdefault("clustering", {})
-    section["gap_seconds"] = float(_number("c", "gap_seconds", section.get("gap_seconds", 3.0), 0.0, 3600.0, 0.1))
-    section["margin_seconds"] = float(_number("c", "margin_seconds", section.get("margin_seconds", 3.0), 0.0, 3600.0, 0.1))
-    section["max_region_seconds"] = float(_number("c", "max_region_seconds", section.get("max_region_seconds", 30.0), 0.1, 3600.0, 1.0))
-    if section["max_region_seconds"] < 2.0 * section["margin_seconds"]:
-        st.warning("max_region_seconds must be >= 2 * margin_seconds")
-
-
 def _refinement_tab(draft: dict[str, Any]) -> None:
     section = draft.setdefault("refinement", {})
     section["quality_profile_enabled"] = _bool("f", "quality_profile_enabled", section.get("quality_profile_enabled", False))
-    section["use_reranker"] = _bool("f", "use_reranker", section.get("use_reranker", False))
-    c1, c2 = st.columns(2)
-    with c1:
-        section["max_initial_videos"] = int(_number("f", "max_initial_videos", section.get("max_initial_videos", 5), 1, 1000, 1))
-        section["max_regions_per_event_per_video"] = int(_number("f", "max_regions_per_event_per_video", section.get("max_regions_per_event_per_video", 3), 1, 100, 1))
-        section["max_total_regions"] = int(_number("f", "max_total_regions", section.get("max_total_regions", 60), 1, 10_000, 1))
-    with c2:
-        section["exploration_region_ratio"] = float(_number("f", "exploration_region_ratio", section.get("exploration_region_ratio", 0.15), 0.0, 1.0, 0.01))
+    # use_reranker has no widget here: the backend rejects use_reranker=true
+    # unconditionally until the ordered-frame reranker runtime is
+    # implemented, so exposing a control for it would just let a user
+    # trigger a guaranteed 422.
     c1, c2, c3 = st.columns(3)
     with c1:
-        section["video_coverage_weight"] = float(_number("f", "video_coverage_weight", section.get("video_coverage_weight", 0.5), 0.0, 1.0, 0.05))
+        section["video_coverage_weight"] = float(_number("f", "video_coverage_weight", section.get("video_coverage_weight", 0.0), 0.0, 1.0, 0.05))
     with c2:
-        section["video_mean_weight"] = float(_number("f", "video_mean_weight", section.get("video_mean_weight", 0.3), 0.0, 1.0, 0.05))
+        section["video_mean_weight"] = float(_number("f", "video_mean_weight", section.get("video_mean_weight", 1.0), 0.0, 1.0, 0.05))
     with c3:
-        section["video_min_weight"] = float(_number("f", "video_min_weight", section.get("video_min_weight", 0.2), 0.0, 1.0, 0.05))
+        section["video_min_weight"] = float(_number("f", "video_min_weight", section.get("video_min_weight", 0.0), 0.0, 1.0, 0.05))
 
 
 def _boundary_tab(draft: dict[str, Any]) -> None:

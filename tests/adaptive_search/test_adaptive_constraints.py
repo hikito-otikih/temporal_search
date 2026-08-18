@@ -71,7 +71,7 @@ class AdaptiveConstraintApiTests(unittest.TestCase):
         )
         self.assertEqual(non_adjacent.status_code, 422, non_adjacent.text)
 
-    def test_video_scope_constraint_rebuilds_frontier_contract(self):
+    def test_video_scope_constraint_invalidates_downstream_stages(self):
         response = self.client.put(
             f"/v1/search-sessions/{self.session_id}/constraints",
             json={
@@ -82,7 +82,7 @@ class AdaptiveConstraintApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(
             response.json()["invalidated_stages"],
-            ["frontier", "refinement", "proposal", "tuple"],
+            ["refinement", "proposal", "tuple"],
         )
 
     def test_unknown_event_reference_is_rejected(self):

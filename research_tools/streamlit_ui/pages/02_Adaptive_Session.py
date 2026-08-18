@@ -110,8 +110,7 @@ counts = response.artifact_counts if response else None
 if counts:
     st.caption(
         f"candidates {counts.candidates} · regions {counts.regions} · "
-        f"frontier {counts.frontier_regions} · frame scores {counts.frame_scores} · "
-        f"proposals {counts.proposals} · tuples {counts.tuples} · runs {counts.runs}"
+        f"proposals {counts.proposals} · runs {counts.runs}"
     )
 
 invalidated = (response.session.get("last_invalidated_stages", []) if response else [])
@@ -261,73 +260,15 @@ elif step == STEP_LABELS[2]:
 
 elif step == STEP_LABELS[3]:
     st.subheader("Frame scores")
-    if session_id is None:
-        st.warning("Create a session first.")
-    else:
-        regions = client.get_regions(session_id, limit=1000).get("items", [])
-        capability = None
-        capabilities = SS.capabilities(st.session_state)
-        if capabilities is not None:
-            capability = capabilities.adaptive()
-        live_available = bool(capability and capability.live_refinement_available)
-        if not live_available:
-            st.warning("Live dense refinement is unavailable on this deployment. "
-                       "You can still ingest precomputed frame scores below.")
-        if st.button("Run dense live refinement"):
-            if live_available:
-                st.info("Live refinement endpoint is not wired yet; precomputed ingest is the supported path.")
-            else:
-                st.error("Live refinement unavailable — see provider capability reason.")
-
-        region_options = {region.get("id"): region for region in regions}
-        st.caption(f"{len(region_options)} regions available for scoring.")
-        with st.expander("Frame-score JSON template"):
-            template = []
-            if regions:
-                region = regions[0]
-                template.append(
-                    {
-                        "session_id": session_id,
-                        "event_id": region.get("event_id"),
-                        "video_id": region.get("video_id"),
-                        "region_id": region.get("id"),
-                        "frame_id": 120,
-                        "timestamp_seconds": 4.0,
-                        "raw_anchor_score": 0.9,
-                        "raw_pre_score": 0.1,
-                        "raw_post_score": 0.7,
-                        "raw_motion_score": 0.0,
-                    }
-                )
-            st.code(json.dumps(template, indent=2, ensure_ascii=False))
-        uploaded = st.file_uploader("Upload frame-score JSON", type=["json"], key="frame_scores_upload")
-        paste = st.text_area("Or paste frame-score JSON", height=200, key="frame_scores_paste")
-        if st.button("Ingest frame scores", type="primary"):
-            payload = None
-            if uploaded is not None:
-                payload = json.loads(uploaded.read().decode("utf-8"))
-            elif paste.strip():
-                payload = json.loads(paste)
-            if payload is None:
-                st.error("Provide samples via upload or paste.")
-            else:
-                samples = payload if isinstance(payload, list) else payload.get("samples", payload.get("frame_scores", []))
-                region_ids = sorted({sample.get("region_id") for sample in samples})
-                if not region_ids:
-                    st.error("No region_id found in samples.")
-                else:
-                    def _ingest(rev):
-                        return client.ingest_frame_scores(
-                            session_id, expected_revision=rev,
-                            region_ids=region_ids, samples=samples,
-                        )
-                    result, error = SS.apply_mutation(st.session_state, client, _ingest)
-                    if error:
-                        st.error(error)
-                    else:
-                        st.success(f"Run {result.run_id} · proposals {result.artifact_counts.proposals} · tuples {result.artifact_counts.tuples}")
-                        SS.refresh_session(st.session_state, client)
-                        st.rerun()
+    st.info(
+        "`POST .../artifacts/frame-scores` was retired from the backend along "
+        "with the refinement frontier it fed (see "
+        "docs/ADAPTIVE_PIPELINE_MIGRATION.md) — this product does not support "
+        "an external client precomputing frame-level scores and submitting "
+        "them back into a session. Live boundary refinement "
+        "(`apply_boundary_refinement` on Step 3/6) is a separate, unaffected "
+        "mechanism that computes its own scores per request."
+    )
 
 # ---------------------------------------------------------------------------
 # Step 5: Proposals
@@ -336,17 +277,17 @@ elif step == STEP_LABELS[3]:
 elif step == STEP_LABELS[4]:
     st.subheader("Proposals")
     if session_id is None:
-        st.warning("Create a session and ingest frame scores first.")
+        st.warning("Create a session first.")
     else:
         proposals = client.get_proposals(session_id, limit=1000).get("items", [])
         if not proposals:
-            st.info("No proposals. Ingest frame scores in Step 4.")
+            st.info("No proposals yet - proposals are created by fixing a frame "
+                     "(commands/fix-frame), not generated automatically.")
         else:
             from components.proposal_table import render_proposal_table
             render_proposal_table(
                 proposals,
                 on_fix=lambda proposal: _fix_from_proposal(proposal),
-                on_reject=lambda proposal: _reject_proposal(proposal),
             )
 
 # ---------------------------------------------------------------------------
@@ -362,10 +303,9 @@ elif step == STEP_LABELS[5]:
             "`GET .../tuples` was retired from the backend (see "
             "docs/ADAPTIVE_PIPELINE_MIGRATION.md) — tuples are still built internally "
             "and feed `commands/fix-frame`, but there's no HTTP surface left to list "
-            "their contents here."
+            "their contents here. See Step 3's video-priorities view for the "
+            "winning tuple's per-event fields instead."
         )
-        tuple_count = response.artifact_counts.tuples if response is not None else 0
-        st.metric("Tuple count", tuple_count)
 
 # ---------------------------------------------------------------------------
 # Step 7: Feedback/recompute
@@ -459,20 +399,6 @@ def _fix_from_proposal(proposal: dict[str, Any]) -> None:
         SS.refresh_session(st.session_state, client)
 
 
-def _reject_proposal(proposal: dict[str, Any]) -> None:
-    result, error = SS.apply_mutation(
-        st.session_state,
-        client,
-        lambda rev: client.reject_proposal(
-            session_id, expected_revision=rev,
-            event_id=proposal.get("event_id"), proposal_id=proposal.get("id"),
-        ),
-    )
-    if error:
-        st.error(error)
-    else:
-        st.info(f"Rejected {proposal.get('id')}: invalidated {result.invalidated_stages}")
-        SS.refresh_session(st.session_state, client)
 
 
 def _video_rows(regions: list[dict[str, Any]]) -> list[dict[str, Any]]:

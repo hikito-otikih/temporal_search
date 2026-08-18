@@ -100,106 +100,22 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(items[0]["event_coverage"], 2)
         self.assertEqual(items[1]["event_coverage"], 1)
 
-    def test_session_candidate_score_and_hyperparameter_patch_pipeline(self):
+    def test_stale_hyperparameter_patch_conflicts_with_current_revision(self):
         session_id = self.create_session()
-        candidates = [
-            {
-                "id": "c1",
-                "session_id": session_id,
-                "event_id": "e1",
-                "video_id": "video",
-                "frame_id": 20,
-                "timestamp_seconds": 2.0,
-                "raw_relevance_score": 0.8,
-                "query_variant": "anchor-en-0",
-            },
-            {
-                "id": "c2",
-                "session_id": session_id,
-                "event_id": "e2",
-                "video_id": "video",
-                "frame_id": 60,
-                "timestamp_seconds": 6.0,
-                "raw_relevance_score": 0.9,
-                "query_variant": "anchor-en-0",
-            },
-        ]
-        response = self.client.post(
+        self.client.post(
             f"/v1/search-sessions/{session_id}/artifacts/candidates",
             json={
                 "expected_revision": 0,
                 "event_ids": ["e1", "e2"],
-                "candidates": candidates,
-            },
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["artifact_counts"]["regions"], 2)
-
-        regions_response = self.client.get(
-            f"/v1/search-sessions/{session_id}/regions"
-        )
-        regions = regions_response.json()["items"]
-        region_by_event = {item["event_id"]: item for item in regions}
-        samples = []
-        for event_id, center in (("e1", 2.0), ("e2", 6.0)):
-            region = region_by_event[event_id]
-            for offset in (-2, -1, 0, 1, 2):
-                timestamp = center + offset
-                before = offset < 0
-                samples.append(
+                "candidates": [
                     {
-                        "session_id": session_id,
-                        "event_id": event_id,
-                        "video_id": "video",
-                        "region_id": region["id"],
-                        "frame_id": int(timestamp * 10),
-                        "timestamp_seconds": timestamp,
-                        "raw_anchor_score": 1.0 if offset == 0 else 0.1,
-                        "raw_pre_score": 2.0 if before else -2.0,
-                        "raw_post_score": -2.0 if before else 2.0,
-                        "raw_motion_score": 0.0,
-                    }
-                )
-
-        partial = self.client.post(
-            f"/v1/search-sessions/{session_id}/artifacts/frame-scores",
-            json={
-                "expected_revision": 0,
-                "region_ids": [item["id"] for item in regions],
-                "samples": [
-                    sample for sample in samples if sample["event_id"] == "e1"
+                        "id": "c1", "session_id": session_id, "event_id": "e1",
+                        "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
+                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                    },
                 ],
             },
         )
-        self.assertEqual(partial.status_code, 422, partial.text)
-        self.assertEqual(
-            partial.json()["detail"]["code"],
-            "invalid_adaptive_input",
-        )
-        unchanged = self.client.get(
-            f"/v1/search-sessions/{session_id}"
-        ).json()
-        self.assertEqual(unchanged["artifact_counts"]["frame_scores"], 0)
-        self.assertTrue(
-            all(
-                item["refinement_status"] == "pending"
-                for item in self.client.get(
-                    f"/v1/search-sessions/{session_id}/regions"
-                ).json()["items"]
-            )
-        )
-
-        response = self.client.post(
-            f"/v1/search-sessions/{session_id}/artifacts/frame-scores",
-            json={
-                "expected_revision": 0,
-                "region_ids": [item["id"] for item in regions],
-                "samples": samples,
-            },
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        counts = response.json()["artifact_counts"]
-        self.assertGreater(counts["proposals"], 0)
 
         response = self.client.patch(
             f"/v1/search-sessions/{session_id}/hyperparameters",
@@ -252,12 +168,14 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["invalidated_stages"], ["tuple"])
 
-    def test_patching_clustering_hyperparameters_does_not_wipe_regions(self):
-        # clustering.* is mapped to stage "region" - a patch used to
-        # silently delete every region in the session (event_ids=None made
-        # the per-event filter reject everything) with no rebuild
-        # afterward: 200 OK, but /video-priorities and /regions were both
-        # broken until a fresh commands/retrieve.
+    def test_patching_one_events_anchor_query_rebuilds_regions_not_wipes_them(self):
+        # anchor_query maps to stage "retrieval", whose downstream sweep
+        # includes "region" - a patch used to silently delete every region
+        # in the session with no rebuild afterward: 200 OK, but
+        # /video-priorities and /regions were both broken until a fresh
+        # commands/retrieve. Scoped to e1 only (event_ids={"e1"}), so e2's
+        # candidates survive invalidation and its region must come back via
+        # the same rebuild, not just e1's.
         session_id = self.create_session()
         self.client.post(
             f"/v1/search-sessions/{session_id}/artifacts/candidates",
@@ -279,21 +197,21 @@ class AdaptiveApiTests(unittest.TestCase):
             },
         )
         response = self.client.patch(
-            f"/v1/search-sessions/{session_id}/hyperparameters",
+            f"/v1/search-sessions/{session_id}/events/e1",
             json={
                 "expected_revision": 0,
-                "patch": {"clustering": {"gap_seconds": 5.0}},
+                "patch": {"anchor_query": "a different anchor query"},
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["artifact_counts"]["regions"], 2)
+        self.assertEqual(response.json()["artifact_counts"]["regions"], 1)
 
         regions_after = self.client.get(f"/v1/search-sessions/{session_id}/regions")
-        self.assertEqual(len(regions_after.json()["items"]), 2)
+        region_events = {item["event_id"] for item in regions_after.json()["items"]}
+        self.assertEqual(region_events, {"e2"})
 
         priorities_after = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
         self.assertEqual(priorities_after.status_code, 200, priorities_after.text)
-        self.assertEqual(len(priorities_after.json()["items"]), 1)
 
     def test_legacy_request_rejects_silent_searcher_fallbacks(self):
         invalid_payloads = (

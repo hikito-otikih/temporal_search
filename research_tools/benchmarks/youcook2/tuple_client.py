@@ -31,14 +31,6 @@ class LegacyTupleResult:
     frames: tuple[Mapping[str, Any], ...]
 
 
-@dataclass(frozen=True)
-class RefineOutcome:
-    available: bool
-    session_revision: int | None = None
-    metrics: Mapping[str, Any] | None = None
-    unavailable_reason: str | None = None
-
-
 class TemporalSearchBackendClient:
     def __init__(
         self,
@@ -191,38 +183,3 @@ class TemporalSearchBackendClient:
             raise BackendApiError(".../video-priorities response is missing an items list")
         return items
 
-    def refine(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        max_frames: int | None = None,
-    ) -> RefineOutcome:
-        payload: dict[str, Any] = {"expected_revision": expected_revision}
-        if max_frames is not None:
-            payload["max_frames"] = max_frames
-        status, body = self._request(
-            "POST", f"/v1/search-sessions/{session_id}/commands/refine", payload
-        )
-        if status == 503 and isinstance(body, Mapping):
-            detail = body.get("detail")
-            code = detail.get("code") if isinstance(detail, Mapping) else None
-            if code == "live_refinement_unavailable":
-                message = detail.get("message") if isinstance(detail, Mapping) else None
-                return RefineOutcome(available=False, unavailable_reason=str(message or code))
-        if status != 200 or not isinstance(body, Mapping):
-            raise BackendApiError(f"POST .../commands/refine returned HTTP {status}: {body}")
-        return RefineOutcome(
-            available=True,
-            session_revision=int(body["session_revision"]),
-            metrics=body.get("metrics"),
-        )
-
-    def get_tuples(self, session_id: str) -> list[Mapping[str, Any]]:
-        status, body = self._request("GET", f"/v1/search-sessions/{session_id}/tuples")
-        if status != 200 or not isinstance(body, Mapping):
-            raise BackendApiError(f"GET .../tuples returned HTTP {status}: {body}")
-        items = body.get("items")
-        if not isinstance(items, list):
-            raise BackendApiError(".../tuples response is missing an items list")
-        return items

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from adaptive_search.schemas import ClusteringHyperparameters, SparseCandidate
-
-from benchmarks.youcook2.legacy_clustering import cluster_temporal_regions
+from adaptive_search.schemas import SparseCandidate
+from benchmarks.youcook2.legacy_clustering import (
+    ClusteringHyperparameters,
+    cluster_temporal_regions,
+)
 
 
 def candidate(candidate_id, event_id, video_id, timestamp, score=0.8):
