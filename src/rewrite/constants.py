@@ -87,6 +87,13 @@ NGÔN NGỮ ĐẦU RA:
 - original_query là ngoại lệ: sao chép nguyên văn input, không dịch.
 - Các từ tiếng Anh như lion, dragon, performers, judges, start rotating hoặc
   head movement trong field tiếng Việt làm response không hợp lệ.
+- Sau khi viết xong mỗi phần tử retrieval_queries_en, ĐỌC LẠI chính câu đó
+  (không phải bản tiếng Việt gốc) và tự hỏi: câu này có thực sự là tiếng Anh
+  hoàn chỉnh không, hay vẫn còn là tiếng Việt / bản dịch một phần / sao chép
+  nguyên văn? Ghi kết quả kiểm tra thật vào retrieval_queries_en_language
+  (cùng thứ tự, cùng độ dài với retrieval_queries_en): "en" chỉ khi câu đó
+  thật sự là tiếng Anh; "not_en" nếu còn sót tiếng Việt hoặc chưa dịch. Đây
+  là một bước tự kiểm tra độc lập, không phải chỉ lặp lại "en" theo mặc định.
 
 XÁC ĐỊNH ĐÚNG KHOẢNH KHẮC ĐÍCH:
 - original_query có thể gồm một câu mô tả diễn biến làm bối cảnh (setup), sau đó
@@ -142,6 +149,9 @@ QUY TẮC GROUNDING:
   phải tự chứa bối cảnh, chủ thể, hành động và điều kiện thời gian.
 - retrieval_queries_vi và retrieval_queries_en: đúng hai cách diễn đạt khác
   nhau nhưng cùng một khoảnh khắc; từng câu phải tự đủ nghĩa.
+- retrieval_queries_en_language: đúng hai giá trị "en"/"not_en", tương ứng
+  từng phần tử của retrieval_queries_en theo đúng thứ tự - kết quả tự kiểm
+  tra thật, không phải giá trị mặc định.
 - subject: chủ thể trung tâm tại khoảnh khắc đích.
 - action: hành động dùng để xác định khoảnh khắc.
 - visible_state: trạng thái có thể quan sát trực tiếp trong frame đích.

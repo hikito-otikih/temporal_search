@@ -35,6 +35,7 @@ def _event(**overrides) -> dict:
             'The dragon moves its head for the first time at the flower market.',
             'The moment the dragon first moves its head at the flower market.',
         ],
+        'retrieval_queries_en_language': ['en', 'en'],
         'subject': 'con rồng',
         'action': 'cử động đầu',
         'visible_state': 'đầu rồng đang cử động',
@@ -202,6 +203,25 @@ class EnglishEchoValidationTests(unittest.TestCase):
                 'Múa lân màu vàng.',
                 'A second, genuinely translated query.',
             ],
+        )
+        with self.assertRaises(SemanticValidationError):
+            _validate_standalone_context(analysis, common_query)
+
+    def test_self_reported_not_en_is_rejected_even_when_langid_is_fooled(self) -> None:
+        # Regression test for exactly why two independent signals matter:
+        # this ASCII-Vietnamese sentence ("Chiec thuyen luot nhe tren song
+        # luc hoang hon.") is a MEASURED py3langid false negative - it gets
+        # classified as English (see rewrite py3langid benchmark). If the
+        # model's own self-report correctly flags it as not_en, that must
+        # still be enough to reject it - the self-report is not redundant
+        # with py3langid, it catches a real, measured gap in it.
+        common_query = 'chợ hoa Tết'
+        analysis = _response(
+            retrieval_queries_en=[
+                'Chiec thuyen luot nhe tren song luc hoang hon.',
+                'A second, genuinely translated query.',
+            ],
+            retrieval_queries_en_language=['not_en', 'en'],
         )
         with self.assertRaises(SemanticValidationError):
             _validate_standalone_context(analysis, common_query)

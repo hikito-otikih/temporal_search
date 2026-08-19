@@ -81,6 +81,17 @@ class RewrittenEvent(StrictSchema):
     target_moment_vi: NonEmptyText
     retrieval_queries_vi: list[NonEmptyText] = Field(min_length=2, max_length=2)
     retrieval_queries_en: list[NonEmptyText] = Field(min_length=2, max_length=2)
+    # Self-report, parallel to retrieval_queries_en (same length, same
+    # order): the model's own judgment of whether each entry is genuinely
+    # English, re-checked as a distinct field rather than assumed from
+    # having followed the earlier "write this in English" instruction.
+    # Deliberately not trusted alone - _validate_standalone_context in
+    # service.py still runs py3langid independently on the same text; a
+    # model that mislabels its own output (or rubber-stamps "en" without
+    # re-checking) is still caught by that server-side check.
+    retrieval_queries_en_language: list[Literal['en', 'not_en']] = Field(
+        min_length=2, max_length=2
+    )
     subject: NonEmptyText
     action: NonEmptyText
     visible_state: NonEmptyText

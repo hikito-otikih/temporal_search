@@ -24,6 +24,7 @@ def rewritten_event(index, query, boundary="start"):
             f"The yellow, black, and white lion performs in event {index}.",
             f"The lion-dance moment in event {index}.",
         ],
+        "retrieval_queries_en_language": ["en", "en"],
         "subject": "con lân",
         "action": "thực hiện hành động",
         "visible_state": "hành động của con lân có thể nhìn thấy",

@@ -40,6 +40,7 @@ def analysis_payload(queries: list[str]) -> dict:
                     'The lion-dance moment involving the yellow, black, and '
                     f'white lion in event {index}.',
                 ],
+                'retrieval_queries_en_language': ['en', 'en'],
                 'subject': 'con lân',
                 'action': 'thực hiện hành động',
                 'visible_state': 'hành động của con lân có thể nhìn thấy',

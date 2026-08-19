@@ -35,6 +35,7 @@ def analysis_result(queries: list[str]) -> RewriteResponse:
                         f'The lion performs the action in event {index}.',
                         f'The lion moment for event {index}.',
                     ],
+                    'retrieval_queries_en_language': ['en', 'en'],
                     'subject': 'con lân',
                     'action': 'thực hiện hành động',
                     'visible_state': 'hành động của con lân có thể nhìn thấy',

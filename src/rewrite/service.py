@@ -245,7 +245,50 @@ def _validate_standalone_context(
             # original_query. Always enforced, even when original_query was
             # itself English: retrieval_queries_en must still actually be
             # English text, just not necessarily *different* text.
-            if not _is_english(en_query):
+            #
+            # Two independent signals, neither trusted alone. py3langid is a
+            # fast, free, statistical check - measured ~95% accurate on a
+            # 40-case benchmark, but with real failure modes: ~83% recall on
+            # Vietnamese written without diacritics (it has no notion of
+            # vocabulary, just character n-gram statistics, and stripping
+            # diacritics removes most of its signal), and occasional false
+            # positives on legitimate English (e.g. misclassified "The chef
+            # chops vegetables quickly." as French). The LLM's own self-
+            # report (retrieval_queries_en_language) has complementary
+            # strengths - real vocabulary knowledge should catch
+            # undiacritized Vietnamese that py3langid misses - and
+            # complementary weaknesses - a model asked to verify its own
+            # output can rubber-stamp instead of genuinely re-checking, and
+            # both signals only exist for the query the model itself
+            # produced, so neither is a general-purpose language detector.
+            # Either one flagging non-English is enough to reject; both
+            # would need to be wrong (in the same direction, on the same
+            # text) for bad output to slip through.
+            self_reported_not_english = (
+                event.retrieval_queries_en_language[query_index] == 'not_en'
+            )
+            # Computed unconditionally (not only when self-report already
+            # passed) so a disagreement between the two signals is always
+            # observable, even on the reject path below - the only way to
+            # find out, from real traffic rather than a hand-picked
+            # benchmark, how often each one actually catches something the
+            # other misses.
+            langid_not_english = not _is_english(en_query)
+            if self_reported_not_english != langid_not_english:
+                logger.warning(
+                    'rewrite_language_signal_disagreement event=%s query_index=%s '
+                    'self_report=%s langid_not_english=%s',
+                    index, query_index,
+                    'not_en' if self_reported_not_english else 'en',
+                    langid_not_english,
+                )
+            if self_reported_not_english:
+                raise SemanticValidationError(
+                    f'events[{index}].retrieval_queries_en[{query_index}] must be '
+                    'written in English - the model itself flagged this entry as '
+                    'not_en in retrieval_queries_en_language'
+                )
+            if langid_not_english:
                 raise SemanticValidationError(
                     f'events[{index}].retrieval_queries_en[{query_index}] must be '
                     'written in English - language identification classified it '

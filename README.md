@@ -206,6 +206,7 @@ Illustrative response (exact wording depends on the configured model):
         "The first moment the yellow, black, and white lion starts spinning on pillar number 4 using its two front legs.",
         "A yellow, black, and white lion beginning its spin on pillar number 4 during a lion dance."
       ],
+      "retrieval_queries_en_language": ["en", "en"],
       "subject": "con lân màu vàng, đen và trắng",
       "action": "bắt đầu xoay vòng trên cột số 4 bằng hai chân trước",
       "visible_state": "hai chân trước của lân ở trên cột số 4 và cơ thể vừa bắt đầu chuyển động xoay",
@@ -244,6 +245,7 @@ Illustrative response (exact wording depends on the configured model):
         "The first moment the yellow, black, and white lion lands with all four feet fully on the ground.",
         "The yellow, black, and white lion fully touching down with all four feet during the lion dance."
       ],
+      "retrieval_queries_en_language": ["en", "en"],
       "subject": "con lân màu vàng, đen và trắng",
       "action": "tiếp đất hoàn toàn bằng cả bốn chân",
       "visible_state": "cả bốn chân của lân đang chạm đất",
