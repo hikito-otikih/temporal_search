@@ -5,7 +5,7 @@ from .schemas import ClusteredCandidate
 import csv
 import json
 from .searchers.temporal import TemporalSearcher
-from .searchers.ambiguous import AmbiguousSearcher
+from .searchers.ambiguous import AmbiguousSearcher, TraversalBudget
 from json import JSONDecodeError
 
 from .constants import MAP_KEYFRAMES_CSV_PATH, OBJECT_DETECTIONS_JSON_PATH
@@ -34,7 +34,7 @@ def _load_frame_index_map(video_name: str) -> dict[int, int]:
 
 
 def check_object_satisfaction(clustered_videos, object_name_list, objectThreshold):
-    required_object_names = set(object_name_list or [])
+    required_object_names = {name.casefold() for name in (object_name_list or [])}
     for video in clustered_videos:
         video_name = video.video_name[:-4]  # Remove .mp4 extension
         frame_index_map = _load_frame_index_map(video_name)
@@ -53,11 +53,16 @@ def check_object_satisfaction(clustered_videos, object_name_list, objectThreshol
                 result.satisfiedObjects = False
                 continue
 
-            detection_class_names = object_data.get("detection_class_names", [])
+            # detection_class_names holds Open Images machine IDs (e.g.
+            # "/m/01jfsr"); detection_class_entities holds the human-readable
+            # labels (e.g. "Lantern") object_name_list is actually written
+            # in - matching against the machine IDs meant this filter could
+            # never match anything a real caller would type.
+            detection_class_entities = object_data.get("detection_class_entities", [])
             detection_scores = object_data.get("detection_scores", [])
             detected_object_names = {
-                detection_class_name
-                for detection_class_name, detection_score in zip(detection_class_names, detection_scores)
+                detection_class_entity.casefold()
+                for detection_class_entity, detection_score in zip(detection_class_entities, detection_scores)
                 if float(detection_score) >= objectThreshold
             }
 
@@ -139,7 +144,7 @@ def _refine_tuple_candidates(
 def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, gamma: float,
                     searcher_type: str = "TemporalSearcher", objectFilterMode: bool = False, object_name_list: list[str] = None,
                     objectThreshold: float = 0.5, apply_boundary_refinement: bool = False
-                    ) -> tuple[list[dict], dict]:
+                    ) -> tuple[list[dict], dict, bool]:
     number_of_queries = len(query)
     clustered_videos = cluster_videos(search_queries(query, top_k_each_query))
     if objectFilterMode:
@@ -152,13 +157,23 @@ def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, g
     ####
     counter = count()
     query_results = []
+    search_truncated = False
     if searcher_type == "AmbiguousSearcher":
+        # One budget shared across every video in this request, not one
+        # fresh MAX_TRAVERSAL_NODES/MAX_TRAVERSAL_SECONDS per video - a
+        # per-video reset let total traversal time multiply with the number
+        # of candidate-heavy videos (measured 200-254s across a handful of
+        # videos even at a realistic 4-5 queries, once top_k_each_query was
+        # raised toward its schema-allowed max). Sharing one budget bounds
+        # the whole request to roughly one video's worth of allowance.
+        budget = TraversalBudget(max_nodes=AmbiguousSearcher.MAX_TRAVERSAL_NODES, max_seconds=AmbiguousSearcher.MAX_TRAVERSAL_SECONDS)
         for video in clustered_videos:
             video_name = video.video_name
             results = video.results
-            ambiguous_searcher = AmbiguousSearcher(number_of_queries, results, top_k_tuple, query_results, gamma, video_name, counter, objectFilterMode)
-            ambiguous_searcher.start_from_last_element()
-    else:     
+            ambiguous_searcher = AmbiguousSearcher(number_of_queries, results, top_k_tuple, query_results, gamma, video_name, counter, objectFilterMode, budget=budget)
+            search_truncated = ambiguous_searcher.start_from_last_element() or search_truncated
+    else:
+        budget = TraversalBudget(max_nodes=TemporalSearcher.MAX_TRAVERSAL_NODES, max_seconds=TemporalSearcher.MAX_TRAVERSAL_SECONDS)
         for video in clustered_videos:
             video_name = video.video_name
             results = video.results
@@ -175,8 +190,8 @@ def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, g
                     list_prev_indices.append(-1)
                     continue
                 list_indices[result.query_id].append(id)
-                if result.query_id > 0: 
-                    list_prev_indices.append(list_nearest_indices[result.query_id - 1]) 
+                if result.query_id > 0:
+                    list_prev_indices.append(list_nearest_indices[result.query_id - 1])
                 else :
                     list_prev_indices.append(-1)
                 list_endable[id] = result.query_id == 0 or list_prev_indices[id] != -1
@@ -187,8 +202,8 @@ def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, g
             # print(f"list_prev_indices: {list_prev_indices}")
             # print(f"list_endable: {list_endable}")
             temporal_searcher = TemporalSearcher(number_of_queries, results, top_k_tuple, query_results, list_indices
-                                                , list_prev_indices, list_endable, gamma, video_name, counter, objectFilterMode)
-            temporal_searcher.start_from_last_query()
+                                                , list_prev_indices, list_endable, gamma, video_name, counter, objectFilterMode, budget=budget)
+            search_truncated = temporal_searcher.start_from_last_query() or search_truncated
 
     capability_available = False
     capability_reason = None
@@ -222,10 +237,10 @@ def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, g
         "available": capability_available,
         "reason": capability_reason,
     }
-    return results, boundary_refinement_capability
+    return results, boundary_refinement_capability, search_truncated
 
 if __name__ == "__main__":
-    query_results, _capability = temporal_search(["cat", "dog", "bird", "fish"], 100, 100, 0.05, "TemporalSearcher"
+    query_results, _capability, _truncated = temporal_search(["cat", "dog", "bird", "fish"], 100, 100, 0.05, "TemporalSearcher"
                                     , objectFilterMode = True, object_name_list = ["cat", "dog"], objectThreshold = 0.5)
     ### export the result to a json file
     with open("data/temporal_search_results_temporal.json", "w", encoding="utf-8") as f:

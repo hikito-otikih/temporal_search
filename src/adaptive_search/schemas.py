@@ -472,6 +472,85 @@ class EventConstraint(StrictModel):
             and self.fixed_region_id in self.rejected_region_ids
         ):
             raise ValueError("fixed_region_id cannot also be rejected")
+        # fixed_video_id is the pin's scope: _region_allowed only narrows a
+        # video's own region choice once it knows *which* video that is
+        # (fix_frame() always stamps both together). A standalone
+        # fixed_region_id/fixed_frame_id/fixed_timestamp_seconds with no
+        # fixed_video_id is silently inert rather than a real independent
+        # pin - reject it instead of accepting a constraint with no effect.
+        if self.fixed_video_id is None and (
+            self.fixed_region_id is not None
+            or self.fixed_frame_id is not None
+            or self.fixed_timestamp_seconds is not None
+        ):
+            raise ValueError(
+                "fixed_region_id/fixed_frame_id/fixed_timestamp_seconds require fixed_video_id"
+            )
+        # The reverse gap: fixed_video_id alone (or with only fixed_frame_id,
+        # no timestamp) is accepted but inert. _region_allowed only narrows
+        # a video's region choice via fixed_timestamp_seconds (the exact-pin
+        # window) or via fixed_region_id with fixed_frame_id absent (a
+        # genuine "pin this existing region" reference) - fixed_frame_id's
+        # own value is never read anywhere in ranking, only its nullness as
+        # a marker alongside those two, so fixed_video_id + fixed_frame_id
+        # with no fixed_timestamp_seconds narrows nothing either. fix_frame()
+        # (the only real caller) always sets fixed_timestamp_seconds
+        # alongside fixed_video_id, so this only rejects raw PUT payloads
+        # that could never have come from it.
+        if (
+            self.fixed_video_id is not None
+            and self.fixed_timestamp_seconds is None
+            and self.fixed_region_id is None
+        ):
+            raise ValueError(
+                "fixed_video_id alone has no effect - set fixed_timestamp_seconds "
+                "(an exact-frame pin) or fixed_region_id (a region pin)"
+            )
+        # fixed_frame_id + fixed_region_id without fixed_timestamp_seconds:
+        # accepted but inert. _region_allowed's region-id-only narrowing
+        # ("a genuine 'pin this existing region' constraint") only applies
+        # when fixed_frame_id is None; its timestamp-window narrowing only
+        # applies when fixed_timestamp_seconds is set. With fixed_frame_id
+        # set and no timestamp, neither condition in _region_allowed,
+        # _effective_region_timestamp, or _synthetic_fixed_regions ever
+        # fires, so this pin silently filters nothing - a 200 that does
+        # exactly what an unset constraint would have done.
+        if (
+            self.fixed_video_id is not None
+            and self.fixed_frame_id is not None
+            and self.fixed_region_id is not None
+            and self.fixed_timestamp_seconds is None
+        ):
+            raise ValueError(
+                "fixed_frame_id + fixed_region_id without fixed_timestamp_seconds "
+                "has no effect - set fixed_timestamp_seconds too, or drop "
+                "fixed_frame_id to make this a plain region pin"
+            )
+        # fixed_region_id + fixed_timestamp_seconds without fixed_frame_id:
+        # accepted, but two different consumers of this same constraint
+        # disagree about what it means. _region_allowed/
+        # _effective_region_timestamp treat fixed_frame_id being absent
+        # alongside fixed_region_id as exactly the "genuine region pin"
+        # carve-out - they narrow to that region and report its own best
+        # candidate's timestamp, never reading fixed_timestamp_seconds at
+        # all. video_priorities.py's boundary-refinement skip-path checks
+        # only fixed_video_id + fixed_timestamp_seconds, with no awareness
+        # of fixed_region_id - it reports fixed_timestamp_seconds as the
+        # event's refined_seconds regardless. The API could then report a
+        # refined_seconds that does not match the timestamp the winning
+        # tuple actually used for that event.
+        if (
+            self.fixed_video_id is not None
+            and self.fixed_region_id is not None
+            and self.fixed_timestamp_seconds is not None
+            and self.fixed_frame_id is None
+        ):
+            raise ValueError(
+                "fixed_region_id + fixed_timestamp_seconds without "
+                "fixed_frame_id is ambiguous - set fixed_frame_id too (an "
+                "exact-frame pin, timestamp wins), or drop "
+                "fixed_timestamp_seconds to make this a plain region pin"
+            )
         return self
 
 
@@ -498,6 +577,16 @@ class AdjacentGapConstraint(StrictModel):
 class SearchConstraints(StrictModel):
     allowed_video_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
     rejected_video_ids: frozenset[NonEmptyStr] = Field(default_factory=frozenset)
+    # Ordered, first = highest priority - distinct from allowed/rejected
+    # (which only control set membership in the ranked list): this reorders
+    # GET .../video-priorities' output directly, floating these video_ids to
+    # the front (in this order) ahead of every video ranked purely by score.
+    # Deliberately does not change any video's own priority_score or a
+    # fixed event's per-video region choice (see fix_frame) - fixing a
+    # frame only affects ranking *within* its own video, never the ordering
+    # of videos against each other; this field is the explicit, separate
+    # mechanism for "put this video first" a user actually asks for.
+    prioritized_video_ids: tuple[NonEmptyStr, ...] = ()
     event_constraints: dict[NonEmptyStr, EventConstraint] = Field(
         default_factory=dict
     )
@@ -509,6 +598,13 @@ class SearchConstraints(StrictModel):
     def accept_json_video_arrays(cls, value):
         if isinstance(value, list):
             return frozenset(value)
+        return value
+
+    @field_validator("prioritized_video_ids", mode="before")
+    @classmethod
+    def accept_json_prioritized_array(cls, value):
+        if isinstance(value, list):
+            return tuple(value)
         return value
 
     @field_validator("adjacent_gap_constraints", mode="before")
@@ -523,6 +619,12 @@ class SearchConstraints(StrictModel):
         overlap = self.allowed_video_ids & self.rejected_video_ids
         if overlap:
             raise ValueError("a video cannot be both allowed and rejected")
+
+        if len(set(self.prioritized_video_ids)) != len(self.prioritized_video_ids):
+            raise ValueError("prioritized_video_ids must not contain duplicates")
+        prioritized_and_rejected = set(self.prioritized_video_ids) & self.rejected_video_ids
+        if prioritized_and_rejected:
+            raise ValueError("a video cannot be both prioritized and rejected")
 
         gap_pairs: set[tuple[str, str]] = set()
         for gap in self.adjacent_gap_constraints:

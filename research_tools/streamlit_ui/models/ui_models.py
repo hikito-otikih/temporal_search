@@ -252,3 +252,38 @@ def format_timestamp(seconds: float) -> str:
     minutes, secs = divmod(whole, 60)
     centis = int(round((seconds - whole) * 100))
     return f"{minutes}:{secs:02d}.{centis:02d}"
+
+
+def normalize_adaptive_items(page: dict[str, Any], event_count: int) -> list[dict[str, Any]]:
+    """Shape a GET /video-priorities page into the flat item dicts the
+    Search page's result list and its constraint-mutation actions
+    (reject/prioritize/fix-frame) both render/re-render from. Shared here
+    (rather than living in the page) so those actions - which live in
+    components/search_constraints.py - can re-normalize a fresh page after
+    a mutation without importing back into the page module."""
+    items = []
+    for entry in page.get("items", []):
+        boundary = entry.get("boundary_refinement") or {}
+        moments = []
+        if boundary.get("status") == "applied":
+            for position, event in enumerate(boundary.get("events") or [], start=1):
+                moments.append(
+                    {
+                        "label": f"moment {position}",
+                        "event_id": event.get("event_id"),
+                        "seconds": event.get("refined_seconds"),
+                        "refined": not event.get("used_fallback", False),
+                        "source": event.get("source", "auto"),
+                    }
+                )
+        video_id = entry.get("video_id")
+        items.append(
+            {
+                "video_id": video_id,
+                "reject_key": video_id,
+                "coverage_label": f"Matched {entry.get('event_coverage', 0)}/{event_count} moments",
+                "priority_score": entry.get("priority_score"),
+                "moments": moments,
+            }
+        )
+    return items

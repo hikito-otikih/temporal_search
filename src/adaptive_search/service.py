@@ -193,6 +193,42 @@ class AdaptiveSearchService:
 
         def mutate(bundle: SessionBundle) -> None:
             _validate_constraints_for_events(bundle.session.events, constraints)
+            # fix_frame() marks an EventProposal user_status="fixed" and
+            # relies on clear_event_constraint() to flip it back via
+            # _clear_fixed_proposal_status() - but this generic replace
+            # bypasses both of those command endpoints, so a caller that
+            # clears or *replaces* an event's pin via a raw PUT here (rather
+            # than commands/fix-frame or commands/clear-constraint) left
+            # GET /proposals reporting a stale "fixed" status for a proposal
+            # the constraint no longer names - not just on full removal:
+            # replacing video A's pin with video B's (or the same video with
+            # a different frame/timestamp) via raw PUT leaves video A's
+            # proposal marked fixed too, since it compared only "is there
+            # still some pin" rather than "is it still the same pin".
+            # Comparing every identifying field catches both cases; this
+            # module has no way to *re*-mark a new match as fixed the way
+            # fix_frame() does (a raw PUT carries no separate video_id/
+            # frame_id/timestamp_seconds to correlate against
+            # bundle.artifacts.proposals), so it only ever clears stale
+            # status, never sets new.
+            previous_event_constraints = bundle.session.constraints.event_constraints
+            for event_id, previous in previous_event_constraints.items():
+                if previous.fixed_video_id is None:
+                    continue
+                updated = constraints.event_constraints.get(event_id)
+                pin_unchanged = updated is not None and (
+                    updated.fixed_video_id,
+                    updated.fixed_region_id,
+                    updated.fixed_frame_id,
+                    updated.fixed_timestamp_seconds,
+                ) == (
+                    previous.fixed_video_id,
+                    previous.fixed_region_id,
+                    previous.fixed_frame_id,
+                    previous.fixed_timestamp_seconds,
+                )
+                if not pin_unchanged:
+                    _clear_fixed_proposal_status(bundle, event_id)
             bundle.session.constraints = constraints.model_copy(deep=True)
             bundle.session.last_invalidated_stages = invalidated
 

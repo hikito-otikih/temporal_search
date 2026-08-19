@@ -132,5 +132,31 @@ class AdaptiveUpstreamTests(unittest.TestCase):
         )
 
 
+class UrlopenJsonTransportTests(unittest.TestCase):
+    # Regression test for a real reported bug: invalid UTF-8 in the upstream
+    # response body raised an uncaught UnicodeDecodeError (a ValueError
+    # subclass) that _raise_api_error's generic fallback mapped to a 422
+    # client input error - misreporting a real upstream problem as if this
+    # service's own request were malformed.
+
+    def test_invalid_utf8_is_reported_as_upstream_error_not_a_value_error(self) -> None:
+        from io import BytesIO
+        from unittest.mock import patch
+
+        from adaptive_search.client import _urlopen_json
+
+        class _FakeResponse(BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                return False
+
+        with patch("adaptive_search.client.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = _FakeResponse(b"\xff\xfe not valid utf-8")
+            with self.assertRaises(UpstreamSearchError):
+                _urlopen_json("http://example.invalid/search", {"query": "q"}, 5.0)
+
+
 if __name__ == "__main__":
     unittest.main()

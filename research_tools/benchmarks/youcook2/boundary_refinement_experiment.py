@@ -79,7 +79,7 @@ def _legacy_before(
         top_k_each_query=_LEGACY_TOP_K_EACH_QUERY,
         gamma=0.05,
         searcher_type=_LEGACY_SEARCHER_TYPES[pipeline],
-    )
+    ).results
     for position, item in enumerate(results, 1):
         if canonical_video_id(item.video_name) == group.video_id:
             return position, legacy_event_timestamps(group, item.frames)

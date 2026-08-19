@@ -193,6 +193,31 @@ class ApiClientTests(unittest.TestCase):
         )
         self.assertEqual(response.session["id"], "s1")
 
+    def test_create_session_from_rewrite_payload_and_response(self):
+        captured = {}
+        analysis = {"video_context": {"scene": "s", "main_entities": ["e"]}, "events": []}
+
+        def handler(request):
+            captured["url"] = str(request.url)
+            captured["json"] = __import__("json").loads(request.content)
+            return json_response(
+                {
+                    "session": {"id": "s1", "revision": 0},
+                    "artifact_counts": {},
+                    "live_refinement": {},
+                }
+            )
+
+        client = make_client(handler)
+        response = client.create_session_from_rewrite(
+            analysis=analysis, common_query="cooking video"
+        )
+        self.assertTrue(captured["url"].endswith("/v1/search-sessions/from-rewrite"))
+        self.assertEqual(
+            captured["json"], {"analysis": analysis, "common_query": "cooking video"}
+        )
+        self.assertEqual(response.session["id"], "s1")
+
     def test_retrieve_session_payload_is_exact(self):
         captured = {}
 

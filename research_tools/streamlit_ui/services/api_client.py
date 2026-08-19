@@ -203,6 +203,43 @@ class TemporalApiClient:
         )
         return SessionResponse.model_validate(data)
 
+    def create_session_from_rewrite(
+        self,
+        *,
+        analysis: dict[str, Any],
+        common_query: str | None = None,
+    ) -> SessionResponse:
+        """Session creation from an already-computed rewrite `analysis`
+        (e.g. the exact dict `preview_rewrite()` already returned) - maps it
+        into a session server-side (`rewrite_bridge.build_session_plan`,
+        pure) without calling the LLM again, unlike
+        create_session_from_queries. Use this whenever a fresh preview is
+        already on hand so Search uses exactly what was previewed."""
+        data = self._request(
+            "POST",
+            "/v1/search-sessions/from-rewrite",
+            json={"analysis": analysis, "common_query": common_query},
+        )
+        return SessionResponse.model_validate(data)
+
+    def preview_rewrite(
+        self,
+        *,
+        queries: list[str],
+        common_query: str | None = None,
+    ) -> dict[str, Any]:
+        """Standalone POST /rewrite - runs the same LLM rewrite as
+        create_session_from_queries but creates nothing itself. The result
+        can be fed into create_session_from_rewrite() to create a session
+        from exactly this analysis with no further LLM call - see that
+        method. Not under /v1 - this router has no prefix.
+        """
+        return self._request(
+            "POST",
+            "/rewrite",
+            json={"query": queries, "common_query": common_query},
+        )
+
     def get_session(self, session_id: str) -> SessionResponse:
         data = self._request("GET", f"/v1/search-sessions/{session_id}")
         return SessionResponse.model_validate(data)

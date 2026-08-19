@@ -137,6 +137,54 @@ class AdaptivePipelineTests(unittest.TestCase):
             session["retrieval_variants"]["evt1"][0],
             "Con lân màu vàng đen trắng thực hiện hành động ở sự kiện 1.",
         )
+    def test_from_rewrite_creates_the_same_session_with_zero_llm_calls(self):
+        # No rewrite_queries_and_build_plan patch/mock anywhere in this test -
+        # if /from-rewrite tried to call the LLM, there would be nothing to
+        # answer it and this would error out. Passing cleanly is itself the
+        # proof this endpoint never calls Ollama: it only maps an
+        # already-computed analysis (e.g. one the UI already fetched via
+        # POST /rewrite to preview) into a session, exactly matching what
+        # /from-queries would have produced for the same analysis.
+        queries = [
+            "Khoảnh khắc đầu tiên con lân xoay vòng.",
+            "Khoảnh khắc bốn chân chạm đất đầu tiên.",
+        ]
+        response = self.client.post(
+            "/v1/search-sessions/from-rewrite",
+            json={
+                "analysis": analysis(queries).model_dump(mode="json"),
+                "common_query": "Video múa lân.",
+            },
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        session_id = response.json()["session"]["id"]
+
+        response = self.client.get(f"/v1/search-sessions/{session_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        session = response.json()["session"]
+
+        self.assertEqual(
+            [event["event_id"] for event in session["events"]],
+            ["evt0", "evt1"],
+        )
+        self.assertEqual(session["events"][0]["boundary_type"], "onset")
+        self.assertEqual(len(session["retrieval_variants"]["evt0"]), 4)
+        self.assertEqual(
+            session["retrieval_variants"]["evt1"][0],
+            "Con lân màu vàng đen trắng thực hiện hành động ở sự kiện 1.",
+        )
+
+    def test_from_rewrite_rejects_unknown_request_fields(self):
+        queries = ["Một sự kiện."]
+        response = self.client.post(
+            "/v1/search-sessions/from-rewrite",
+            json={
+                "analysis": analysis(queries).model_dump(mode="json"),
+                "modelname": "gpt-oss:20b",
+            },
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
     def test_from_queries_rejects_unknown_request_fields(self):
         response = self.client.post(
             "/v1/search-sessions/from-queries",

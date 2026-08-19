@@ -17,15 +17,13 @@ OLLAMA_RETRY_DELAY_SECONDS = 0.25
 TRANSIENT_OLLAMA_STATUSES = {408, 425, 500, 502, 503, 504}
 
 CONTEXT_TERM_PATTERN = re.compile(r'[^\W\d_]+', flags=re.UNICODE)
-# Any character from these ranges is essentially a Vietnamese fingerprint -
-# Latin Extended Additional (U+1E00-U+1EFF) covers nearly every stacked
-# Vietnamese tone-mark vowel (e.g. ề, ố, ặ), and đ/Đ, ơ/Ơ, ư/Ư, ă/Ă have no
-# ordinary-English or generic-Latin-loanword use. Genuine English text does
-# not contain these; catches the common failure of retrieval_queries_en
-# being left in (or paraphrased into) Vietnamese instead of translated.
-VIETNAMESE_SIGNATURE_PATTERN = re.compile(
-    '[Ḁ-ỿĂăĐđƠơƯư]'
-)
+# retrieval_queries_en's "is this actually English" check uses py3langid
+# (statistical language identification over its full ~97-language set, see
+# _is_english in service.py) rather than a character-set regex - a regex
+# narrow enough to avoid flagging genuine loanwords (café, naïve) also
+# missed plain single-diacritic Vietnamese ("Múa lân màu vàng") and, being
+# script-based at all, could never catch Vietnamese written without any
+# diacritics ("Mua lan mau vang").
 COMMON_QUERY_INSTRUCTION_SUFFIX = re.compile(
     r'[\s,;:.]*(?:hãy\s+)?tìm\s+(?:các\s+|những\s+)?'
     r'sự\s+kiện(?:\s+sau(?:\s+đây)?)?[\s.!:;]*$',

@@ -309,6 +309,150 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         )
         self.assertGreater(len(tuples), 0)
 
+    def test_tight_cap_does_not_discard_the_correctly_ordered_winner(self) -> None:
+        """Regression test for a real reported bug (Blocker 1): an earlier
+        attempt at bounding heap memory truncated each expansion's children
+        to the top few by raw coarse score, before order/gap scoring ran.
+        That is unsound for the *last* event in a tuple, whose children go
+        straight to finalize() - which computes the REAL order-agreement
+        term from the actual chosen timestamp, not the optimistic bound. A
+        lower-scoring, correctly-ordered region can (and, with order_weight
+        defaulting to 0.8, easily does) beat a higher-scoring, wrong-order
+        one once finalized. e2's pool below has four higher-scoring but
+        wrong-order decoys ranked above the correct-order winner - with
+        max_combinations_per_video=3 (this session's exact reported repro),
+        a top-3-by-raw-score truncation would keep only the decoys and
+        never even consider the real winner.
+        """
+        e1_region = _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.9)
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=1.0),
+        }
+        e2_regions = []
+        for name, score, seconds in [
+            ("wrong1", 0.95, 1.0),
+            ("wrong2", 0.90, 2.0),
+            ("wrong3", 0.85, 3.0),
+            ("wrong4", 0.80, 4.0),
+            ("right", 0.30, 60.0),
+        ]:
+            e2_regions.append(
+                _region(name, event_id="e2", video_id="v1", candidate_ids=[f"c_{name}"], normalized_coarse_score=score)
+            )
+            candidates_by_id[f"c_{name}"] = _candidate(
+                f"c_{name}", event_id="e2", video_id="v1", timestamp_seconds=seconds, raw_relevance_score=1.0
+            )
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, order_weight=0.8, confidence_gate="none",
+            max_combinations_per_video=3, max_tuples_per_video=1,
+        )
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2"], [e1_region] + e2_regions, candidates_by_id, params,
+        )
+        self.assertEqual(len(tuples), 1)
+        self.assertEqual(tuples[0].region_ids, ("r1", "right"))
+        self.assertGreater(tuples[0].score, 1.0)
+
+    def test_heap_trim_bounds_growth_across_many_expansions(self) -> None:
+        """Regression test for a real reported bug: max_combinations_per_video
+        only bounded heap *pops*, not pushes - without any trim, two large
+        pools (one per event) could compound across expansions toward
+        pool_size x pool_size entries. A single expansion must still be free
+        to push every one of its own children (see the test above - that's
+        what correctness requires), but the heap must not be allowed to
+        accumulate anywhere near a full pool's worth even from one
+        expansion's own fan-out: it must be trimmed after every individual
+        push, not once per expansion. Regression test for a real reported
+        bug: an earlier version trimmed only once per expansion, after the
+        entire fan-out loop over one event's pool had already pushed every
+        child - with cap=1 and a 5,000-region pool, the heap still reached
+        5,000 entries before that trim ever ran once."""
+        import heapq as heapq_module
+        from unittest.mock import patch
+
+        pool_size = 3000
+        e1_regions = [
+            _region(f"a{i}", event_id="e1", video_id="v1", candidate_ids=[f"ca{i}"], normalized_coarse_score=i / pool_size)
+            for i in range(pool_size)
+        ]
+        e2_regions = [
+            _region(f"b{i}", event_id="e2", video_id="v1", candidate_ids=[f"cb{i}"], normalized_coarse_score=i / pool_size)
+            for i in range(pool_size)
+        ]
+        candidates_by_id = {}
+        for i in range(pool_size):
+            candidates_by_id[f"ca{i}"] = _candidate(f"ca{i}", event_id="e1", video_id="v1", timestamp_seconds=float(i), raw_relevance_score=1.0)
+            candidates_by_id[f"cb{i}"] = _candidate(f"cb{i}", event_id="e2", video_id="v1", timestamp_seconds=1000.0 + i, raw_relevance_score=1.0)
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, max_combinations_per_video=5, max_tuples_per_video=1,
+            max_regions_per_event=pool_size,
+        )
+
+        peak_heap_size = 0
+        real_heappush = heapq_module.heappush
+
+        def _tracking_heappush(heap, item):
+            nonlocal peak_heap_size
+            real_heappush(heap, item)
+            peak_heap_size = max(peak_heap_size, len(heap))
+
+        with patch("heapq.heappush", side_effect=_tracking_heappush):
+            tuples = assemble_region_tuples_for_video(
+                "v1", ["e1", "e2"], e1_regions + e2_regions, candidates_by_id, params,
+            )
+
+        self.assertEqual(len(tuples), 1)
+        # Bounded by the cap itself (n=2 events -> floor of 3, so
+        # effective_max_combinations = max(5, 3) = 5), not by pool_size or
+        # pool_size * pool_size - only +1 slack for the one push that
+        # transiently exceeds the cap before push()'s own trim clips it back
+        # down, which is exactly when _tracking_heappush's wrapper samples
+        # len(heap) (right after heapq.heappush, before push()'s trim runs).
+        effective_max_combinations = max(params.max_combinations_per_video, len(["e1", "e2"]) + 1)
+        self.assertLessEqual(peak_heap_size, effective_max_combinations + 1)
+
+    def test_heap_trim_bounds_a_single_expansions_own_fan_out(self) -> None:
+        """Regression test for the exact reported repro: cap=1 (floored to
+        2 - the minimum for one event to ever produce a result) against a
+        single 5,000-region pool. The old trim sat after the whole fan-out
+        loop, so the very first expansion alone could push all 5,000
+        children before the trim ever ran once. Trimming per-push instead
+        must keep the heap close to the cap even mid-fan-out, not just
+        between expansions."""
+        import heapq as heapq_module
+        from unittest.mock import patch
+
+        pool_size = 5000
+        e1_regions = [
+            _region(f"a{i}", event_id="e1", video_id="v1", candidate_ids=[f"ca{i}"], normalized_coarse_score=i / pool_size)
+            for i in range(pool_size)
+        ]
+        candidates_by_id = {
+            f"ca{i}": _candidate(f"ca{i}", event_id="e1", video_id="v1", timestamp_seconds=float(i), raw_relevance_score=1.0)
+            for i in range(pool_size)
+        }
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, max_combinations_per_video=1, max_tuples_per_video=1,
+            max_regions_per_event=pool_size,
+        )
+
+        peak_heap_size = 0
+        real_heappush = heapq_module.heappush
+
+        def _tracking_heappush(heap, item):
+            nonlocal peak_heap_size
+            real_heappush(heap, item)
+            peak_heap_size = max(peak_heap_size, len(heap))
+
+        with patch("heapq.heappush", side_effect=_tracking_heappush):
+            tuples = assemble_region_tuples_for_video(
+                "v1", ["e1"], e1_regions, candidates_by_id, params,
+            )
+
+        self.assertEqual(len(tuples), 1)
+        effective_max_combinations = max(params.max_combinations_per_video, len(["e1"]) + 1)
+        self.assertLessEqual(peak_heap_size, effective_max_combinations + 1)
+
     def test_adjacent_gap_constraint_hard_rejects_violating_combination(self) -> None:
         regions = [
             _region("r1_close", event_id="e1", video_id="v1", candidate_ids=["c1c"], normalized_coarse_score=0.9, start_seconds=10.0, end_seconds=10.0),
@@ -559,8 +703,14 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
             "c2": _candidate("c2", event_id="e1", video_id="v1", timestamp_seconds=20.0, raw_relevance_score=1.0),
         }
         params = TupleRankingHyperparameters(relative_delta=1.0)
+        # fix_frame() always stamps fixed_video_id alongside fixed_region_id
+        # (service.py) - a region pin is scoped to "narrow this video's own
+        # choice", not "exclude every other video from this event", so the
+        # narrowing check only fires once region.video_id matches.
         constraints = SearchConstraints(
-            event_constraints={"e1": EventConstraint(fixed_region_id="r2")}
+            event_constraints={
+                "e1": EventConstraint(fixed_video_id="v1", fixed_region_id="r2")
+            }
         )
         _, tuples_by_video = rank_videos_by_region_tuples(
             regions, candidates_by_id, ["e1"], params, None, constraints,
@@ -588,11 +738,44 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
         winner = tuples_by_video["v1"][0]
         self.assertEqual(winner.timestamps, (42.0,))
 
-    def test_fixed_timestamp_excludes_other_videos_for_that_event(self) -> None:
-        # fixed_video_id already means "only this video can satisfy this
-        # event" for fixed_region_id (test above); confirm the same holds
-        # when synthesizing from a bare fixed_timestamp_seconds too - v2's
-        # real, higher-scoring region for e1 must not survive filtering.
+    def test_fixed_timestamp_inside_a_broad_region_is_still_reported_exactly(self) -> None:
+        # Regression test for a real reported bug: when the fixed timestamp
+        # already falls inside an existing region's span,
+        # _synthetic_fixed_regions deliberately skips synthesizing a
+        # placeholder (already_covered) and defers to that real region -
+        # but a *broad* region (start != end, several real candidates
+        # inside it) reported its own best-*scoring* candidate's timestamp,
+        # not the user's actual pin, whenever those differ. Here the
+        # region's best-scoring candidate sits at 10s but the user pinned
+        # 42s (still within the region's [0, 50] span) - the reported
+        # timestamp must be exactly 42.0, not 10.0.
+        regions = [
+            _region(
+                "r1", event_id="e1", video_id="v1", candidate_ids=["c_best", "c_pinned"],
+                normalized_coarse_score=0.9, start_seconds=0.0, end_seconds=50.0,
+            ),
+        ]
+        candidates_by_id = {
+            "c_best": _candidate("c_best", event_id="e1", video_id="v1", timestamp_seconds=10.0, raw_relevance_score=0.99),
+            "c_pinned": _candidate("c_pinned", event_id="e1", video_id="v1", timestamp_seconds=42.0, raw_relevance_score=0.5),
+        }
+        constraints = SearchConstraints(
+            event_constraints={"e1": EventConstraint(fixed_video_id="v1", fixed_timestamp_seconds=42.0)}
+        )
+        params = TupleRankingHyperparameters()
+        _, tuples_by_video = rank_videos_by_region_tuples(
+            regions, candidates_by_id, ["e1"], params, None, constraints,
+        )
+        winner = tuples_by_video["v1"][0]
+        self.assertEqual(winner.region_ids, ("r1",))
+        self.assertEqual(winner.timestamps, (42.0,))
+
+    def test_fixed_timestamp_does_not_exclude_other_videos_for_that_event(self) -> None:
+        # A fix_frame pin on v1 must narrow only v1's own region choice for
+        # e1 - it must not remove v2's region from the pool, or v2 would
+        # lose all coverage of e1 and vanish from ranking entirely as a side
+        # effect of a pin that has nothing to do with it. Cross-video
+        # ordering is a separate, explicit mechanism (prioritized_video_ids).
         regions = [
             _region("v1_e1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.5),
             _region("v2_e1", event_id="e1", video_id="v2", candidate_ids=["c2"], normalized_coarse_score=0.95),
@@ -608,7 +791,8 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
         ranking, tuples_by_video = rank_videos_by_region_tuples(
             regions, candidates_by_id, ["e1"], params, None, constraints,
         )
-        self.assertNotIn("v2", tuples_by_video)
+        self.assertIn("v2", tuples_by_video)
+        self.assertEqual(tuples_by_video["v2"][0].region_ids, ("v2_e1",))
         self.assertEqual(tuples_by_video["v1"][0].timestamps, (42.0,))
 
     def test_fixed_timestamp_wins_even_when_a_real_region_already_covers_it(self):

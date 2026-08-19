@@ -1,11 +1,13 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from adaptive_search.embedding import l2_normalize
+from adaptive_search import boundary_refinement as boundary_refinement_module
 from adaptive_search.boundary_refinement import refine_event_boundary
 from adaptive_search.providers import FrameProviderCapabilities, FrameReference
-from adaptive_search.schemas import ModelRuntimeSpec
+from adaptive_search.schemas import BoundaryHyperparameters, ModelRuntimeSpec
 
 
 MODEL_SPEC = ModelRuntimeSpec(
@@ -169,6 +171,60 @@ class RefineEventBoundaryTests(unittest.TestCase):
         sparse_targets = sparse_provider.calls[0]
         self.assertEqual(len(dense_targets), len(sparse_targets))
         self.assertLess(max(dense_targets) - min(dense_targets), max(sparse_targets) - min(sparse_targets))
+
+    def test_default_window_options_seconds_is_still_natively_derived(self) -> None:
+        with patch(
+            "adaptive_search.boundary_refinement.generate_profiled_proposals",
+            wraps=boundary_refinement_module.generate_profiled_proposals,
+        ) as spy:
+            refine_event_boundary(
+                provider=FakeFrameProvider(),
+                embedder=FakeEmbedder(),
+                video_id="video-a",
+                event_id="e1",
+                anchor_query="cut onion",
+                pre_state="before",
+                post_state="after",
+                boundary_type="onset",
+                anchor_seconds=10.0,
+                fps=30.0,
+                radius_frames=10,
+                stride=1,
+                parameters=BoundaryHyperparameters(),  # untouched schema default
+            )
+        used_parameters = spy.call_args.args[2]
+        self.assertNotEqual(used_parameters.window_options_seconds, (0.5, 1.0, 2.0, 3.0))
+
+    def test_explicitly_customized_window_options_seconds_is_honored(self) -> None:
+        # Regression test for a real reported bug: window_options_seconds is
+        # a real, publicly-patchable BoundaryHyperparameters field (the
+        # youcook2 benchmark's own boundary_refinement.py constructs it
+        # directly), but live refinement always silently overwrote it with
+        # native fps/stride-derived values regardless of what a caller
+        # configured. A value that differs from the schema default must now
+        # survive unchanged.
+        custom_windows = (0.7, 1.3, 5.0)
+        with patch(
+            "adaptive_search.boundary_refinement.generate_profiled_proposals",
+            wraps=boundary_refinement_module.generate_profiled_proposals,
+        ) as spy:
+            refine_event_boundary(
+                provider=FakeFrameProvider(),
+                embedder=FakeEmbedder(),
+                video_id="video-a",
+                event_id="e1",
+                anchor_query="cut onion",
+                pre_state="before",
+                post_state="after",
+                boundary_type="onset",
+                anchor_seconds=10.0,
+                fps=30.0,
+                radius_frames=10,
+                stride=1,
+                parameters=BoundaryHyperparameters(window_options_seconds=custom_windows),
+            )
+        used_parameters = spy.call_args.args[2]
+        self.assertEqual(used_parameters.window_options_seconds, custom_windows)
 
 
 if __name__ == "__main__":

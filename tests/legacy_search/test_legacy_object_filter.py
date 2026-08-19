@@ -21,13 +21,29 @@ class CheckObjectSatisfactionTests(unittest.TestCase):
         candidate = ClusteredCandidate(frame_index=90, timestamp="00:00:03", score=1.0)
         videos = [Videos(video_name="L21_V002.mp4", results=[candidate])]
 
-        # check_object_satisfaction matches against detection_class_names
-        # (the raw class-ID strings, e.g. "/m/01jfsr" for "Lantern"), not
-        # detection_class_entities (the human-readable names) - "/m/01jfsr"
-        # is 002.json's real top detection at score 0.797. If the code were
-        # still opening 001.json (valid JSON, but zero detections), this
-        # would come back False instead.
-        check_object_satisfaction(videos, ["/m/01jfsr"], objectThreshold=0.5)
+        # check_object_satisfaction matches against detection_class_entities
+        # (the human-readable names, e.g. "Lantern"), not
+        # detection_class_names (the raw "/m/01jfsr"-style class-ID strings
+        # a real caller never types - object_name_list=["cat", "dog"] is the
+        # documented example usage). "Lantern" is 002.json's real top
+        # detection at score 0.797. If the code were still opening 001.json
+        # (valid JSON, but zero detections), this would come back False
+        # instead.
+        check_object_satisfaction(videos, ["Lantern"], objectThreshold=0.5)
+
+        self.assertTrue(candidate.satisfiedObjects)
+
+    def test_matching_is_case_insensitive(self):
+        # Regression test for a real reported bug: check_object_satisfaction
+        # used to match against detection_class_names (machine IDs like
+        # "/m/01jfsr") instead of detection_class_entities (human-readable
+        # labels like "Lantern") - object_name_list is written in plain,
+        # often lowercase words ("cat", "dog"), so matching must also be
+        # case-insensitive against the capitalized Open Images entities.
+        candidate = ClusteredCandidate(frame_index=90, timestamp="00:00:03", score=1.0)
+        videos = [Videos(video_name="L21_V002.mp4", results=[candidate])]
+
+        check_object_satisfaction(videos, ["lantern"], objectThreshold=0.5)
 
         self.assertTrue(candidate.satisfiedObjects)
 

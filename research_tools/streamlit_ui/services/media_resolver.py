@@ -42,6 +42,12 @@ def _normalize_root(media_root: str | Path | None) -> Path | None:
 class MediaResolver:
     def __init__(self, media_root: str | Path | None = None) -> None:
         self.media_root = _normalize_root(media_root)
+        # get_media_resolver() wraps construction in st.cache_resource, so
+        # one MediaResolver instance is shared process-wide - this cache
+        # persists across reruns and across every caller, not just within a
+        # single resolve_keyframe_near() call. Keyframe manifests are static
+        # per video_id, so there is no staleness concern.
+        self._keyframe_manifest_cache: dict[str, list[dict[str, Any]] | None] = {}
 
     def available(self) -> bool:
         return self.media_root is not None and self.media_root.is_dir()
@@ -86,6 +92,23 @@ class MediaResolver:
             return matches[0]
         return None
 
+    def _load_keyframe_manifest(self, video_id: str) -> list[dict[str, Any]] | None:
+        if video_id in self._keyframe_manifest_cache:
+            return self._keyframe_manifest_cache[video_id]
+        manifest_path = self.media_root / "metadata" / f"{video_id}_keyframes.json"
+        keyframes: list[dict[str, Any]] | None = None
+        if manifest_path.is_file():
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                candidate = payload.get("keyframes")
+                if isinstance(candidate, list) and candidate:
+                    keyframes = candidate
+        self._keyframe_manifest_cache[video_id] = keyframes
+        return keyframes
+
     def resolve_keyframe_near(self, video_id: str, seconds: float) -> Path | None:
         """Resolve the keyframe closest in time to ``seconds``.
 
@@ -98,15 +121,8 @@ class MediaResolver:
         """
         if not self.available() or not video_id:
             return None
-        manifest_path = self.media_root / "metadata" / f"{video_id}_keyframes.json"
-        if not manifest_path.is_file():
-            return None
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
-        keyframes = payload.get("keyframes")
-        if not isinstance(keyframes, list) or not keyframes:
+        keyframes = self._load_keyframe_manifest(video_id)
+        if not keyframes:
             return None
         best_entry = None
         best_distance = None

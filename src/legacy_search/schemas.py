@@ -1,6 +1,6 @@
 from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 NonEmptyQuery = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
@@ -57,3 +57,36 @@ class TemporalSearchRequest(BaseModel):
     object_name_list: Optional[list[str]] = None
     objectThreshold: float = Field(default=0.5, ge=0.0, le=1.0)
     apply_boundary_refinement: bool = False
+
+    @model_validator(mode="after")
+    def validate_object_filter(self) -> "TemporalSearchRequest":
+        # check_object_satisfaction() builds required_object_names from
+        # object_name_list, and an empty set is trivially a subset of
+        # anything - with no labels, objectFilterMode=True doesn't filter by
+        # content at all, it accidentally becomes a "does this video have
+        # object-detection metadata at all" filter (satisfiedObjects only
+        # goes False when the detection JSON is missing/unparseable).
+        if self.objectFilterMode and not self.object_name_list:
+            raise ValueError(
+                "object_name_list must be non-empty when objectFilterMode is true"
+            )
+        return self
+
+
+class BoundaryRefinementCapability(BaseModel):
+    requested: bool
+    available: bool
+    reason: Optional[str] = None
+
+
+class TemporalSearchResultItem(BaseModel):
+    score: float
+    video_name: str
+    tuple: list[ClusteredCandidate]
+
+
+class TemporalSearchResponse(BaseModel):
+    query: list[str]
+    results: list[TemporalSearchResultItem]
+    boundary_refinement_capability: BoundaryRefinementCapability
+    search_truncated: bool

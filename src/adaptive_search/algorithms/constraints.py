@@ -26,9 +26,18 @@ def _region_allowed(
     event_constraint = _event_constraint(constraints, region.event_id)
     if region.id in event_constraint.rejected_region_ids:
         return False
-    if event_constraint.fixed_video_id is not None:
-        if region.video_id != event_constraint.fixed_video_id:
-            return False
+    if (
+        event_constraint.fixed_video_id is not None
+        and region.video_id == event_constraint.fixed_video_id
+    ):
+        # A fix_frame pin narrows only the *fixed video's own* region choice
+        # for this event - it must never remove other videos' regions from
+        # the pool, or every other video would lose all coverage of this
+        # event and vanish from ranking entirely (they'd have no region left
+        # to build a tuple from). Cross-video ordering is a separate,
+        # explicit mechanism (prioritized_video_ids), not a side effect of
+        # fixing a frame.
+        #
         # An exact-timestamp pin (fixed_timestamp_seconds set) narrows this
         # event, within the pinned video, to only the region actually
         # covering that timestamp - mirrors _synthetic_fixed_regions'
@@ -55,12 +64,12 @@ def _region_allowed(
             <= region.end_seconds
         ):
             return False
-    if (
-        event_constraint.fixed_frame_id is None
-        and event_constraint.fixed_region_id is not None
-        and region.id != event_constraint.fixed_region_id
-    ):
-        return False
+        if (
+            event_constraint.fixed_frame_id is None
+            and event_constraint.fixed_region_id is not None
+            and region.id != event_constraint.fixed_region_id
+        ):
+            return False
 
     allowlist_overridden = (
         event_constraint.fixed_video_id == region.video_id

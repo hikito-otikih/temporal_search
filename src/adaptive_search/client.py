@@ -254,6 +254,13 @@ def _urlopen_json(
         ) from exc
     except (error.URLError, socket.timeout, TimeoutError) as exc:
         raise UpstreamSearchError("upstream request failed or timed out") from exc
+    except UnicodeDecodeError as exc:
+        # A ValueError subclass - left uncaught, this would otherwise reach
+        # _raise_api_error's generic ValueError fallback and get reported as
+        # a 422 client input error, when invalid UTF-8 is an upstream
+        # response problem, not something wrong with the request this
+        # service sent.
+        raise UpstreamSearchError("upstream returned invalid UTF-8") from exc
     try:
         decoded = json.loads(raw)
     except json.JSONDecodeError as exc:

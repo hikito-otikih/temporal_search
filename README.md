@@ -352,9 +352,17 @@ Example response:
         }
       ]
     }
-  ]
+  ],
+  "boundary_refinement_capability": {
+    "requested": false,
+    "available": false,
+    "reason": null
+  },
+  "search_truncated": false
 }
 ```
+
+`search_truncated` is `true` if a video's backtracking search (`TemporalSearcher`/`AmbiguousSearcher`) hit its internal node budget before exploring every combination exhaustively. `results` are still the best combinations found so far, but are not guaranteed to be the true best possible for that video - treat a `true` value as a signal to narrow the query or lower `top_k_each_query` rather than trusting the ranking as final.
 
 ### Request fields
 
@@ -383,11 +391,11 @@ data/
         └── 002.json
 ```
 
-The CSV must contain `frame_idx` and `n` columns, with `n` starting at 1 (e.g. `frame_idx=0` pairs with `n=1`). The matching row's own `n` value (not its position in the file) selects the object JSON filename, zero-padded to three digits (`001.json`, `002.json`, and so on). Each JSON file must provide parallel `detection_class_names` and `detection_scores` arrays.
+The CSV must contain `frame_idx` and `n` columns, with `n` starting at 1 (e.g. `frame_idx=0` pairs with `n=1`). The matching row's own `n` value (not its position in the file) selects the object JSON filename, zero-padded to three digits (`001.json`, `002.json`, and so on). Each JSON file must provide parallel `detection_class_entities` and `detection_scores` arrays - `detection_class_entities` holds the human-readable label (e.g. `"Person"`), not `detection_class_names` (the raw Open Images machine-ID string, e.g. `"/m/01g317"`), which this endpoint never matches against.
 
 ```json
 {
-  "detection_class_names": ["person", "chair"],
+  "detection_class_entities": ["Person", "Chair"],
   "detection_scores": [0.98, 0.84]
 }
 ```
@@ -403,7 +411,7 @@ Enable the filter in a request:
 }
 ```
 
-A tuple is retained when at least one of its frames contains all requested object classes at or above the threshold.
+A tuple is retained when at least one of its frames contains all requested object classes at or above the threshold. Matching against `detection_class_entities` is case-insensitive, so `object_name_list` values don't need to match the JSON's original capitalization.
 
 ## Run from Python
 
@@ -443,6 +451,7 @@ Pages:
 | Page | Purpose |
 |---|---|
 | `Home.py` | Landing + capability discovery. |
+| `pages/00_Search.py` | The primary, consumer-facing search experience: rewrite preview, retrieval tuning, ranked video results, per-event keyframe browsing, and manual frame fixing. |
 | `pages/01_Legacy_Search.py` | One-shot `/temporal-search`, no session. |
 | `pages/02_Adaptive_Session.py` | Session stepper: events → candidates → regions → frame scores → proposals → tuples → feedback. |
 | `pages/03_Region_Inspector.py` | Timeline, keyframe filmstrip, score curves. |

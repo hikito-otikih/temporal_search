@@ -15,9 +15,11 @@ from ..embedding import (
     QUALITY_QWEN_EMBEDDING_MODEL,
     QUALITY_QWEN_RERANKER_MODEL,
 )
+from ..rewrite_bridge import build_session_plan
 from ..schemas import SearchHyperparameters
 
 from .api_schemas import (
+    CreateSessionFromRewriteRequest,
     CreateSessionRequest,
     MutationResponse,
     PatchEventRequest,
@@ -105,6 +107,35 @@ async def create_session_from_queries(request: RewriteRequest):
             queries=request.query,
             common_query=request.common_query,
         )
+        bundle = adaptive_service.create_session(
+            events=list(plan.events),
+            common_query=plan.common_query,
+            retrieval_variants={
+                event_id: list(texts)
+                for event_id, texts in plan.retrieval_variants.items()
+            },
+            hyperparameters=_apply_runtime_embedding_default(
+                SearchHyperparameters()
+            ),
+        )
+        return _session_response(bundle)
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+@router.post(
+    "/search-sessions/from-rewrite",
+    response_model=SessionResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_session_from_rewrite(request: CreateSessionFromRewriteRequest):
+    # Unlike /from-queries, this never calls the LLM - build_session_plan is
+    # a pure mapping over an analysis the caller already has (e.g. one
+    # fetched via POST /rewrite to preview it first), so a session created
+    # here is guaranteed to match exactly what was previewed instead of a
+    # second, independent (and possibly different) rewrite result.
+    try:
+        plan = build_session_plan(request.analysis, request.common_query)
         bundle = adaptive_service.create_session(
             events=list(plan.events),
             common_query=plan.common_query,

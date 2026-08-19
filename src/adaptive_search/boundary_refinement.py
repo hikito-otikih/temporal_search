@@ -82,6 +82,7 @@ def refine_event_boundary(
     anchor_seconds: float,
     fps: float,
     duration_ms: int | None = None,
+    parameters: BoundaryHyperparameters | None = None,
     radius_frames: int = 10,
     stride: int = 1,
     image_batch_size: int | None = 32,
@@ -152,9 +153,25 @@ def refine_event_boundary(
         for index, frame in enumerate(frames)
     ]
 
-    parameters = BoundaryHyperparameters(
-        window_options_seconds=_native_window_options(fps, stride)
-    )
+    # window_options_seconds defaults to native fps/stride-derived values -
+    # it's normally a frame-alignment concern, not a free-form tunable
+    # (schema-default seconds might not land on an actually-sampled frame
+    # at this video's fps/stride). But it stays a real, publicly-patchable
+    # schema field (the youcook2 benchmark's own ported boundary_refinement
+    # constructs BoundaryHyperparameters with it directly), so a caller who
+    # genuinely customized it away from the schema default is honored
+    # instead of silently discarded - detected by value, not
+    # model_fields_set, since patch_hyperparameters() round-trips the whole
+    # object through model_dump()/model_validate() on every PATCH (even to
+    # unrelated fields), which would mark every field "set" regardless of
+    # whether this one was ever actually touched.
+    base_parameters = parameters or BoundaryHyperparameters()
+    schema_default = BoundaryHyperparameters.model_fields["window_options_seconds"].default
+    if base_parameters.window_options_seconds == schema_default:
+        base_parameters = base_parameters.model_copy(
+            update={"window_options_seconds": _native_window_options(fps, stride)}
+        )
+    parameters = base_parameters
     proposals = generate_profiled_proposals(
         [event_definition], samples, parameters, source="dense"
     )

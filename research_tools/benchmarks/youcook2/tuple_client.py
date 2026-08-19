@@ -31,6 +31,16 @@ class LegacyTupleResult:
     frames: tuple[Mapping[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class LegacySearchOutcome:
+    results: list[LegacyTupleResult]
+    search_truncated: bool
+    """True if the backend's backtracking search hit its node budget before
+    exploring exhaustively for at least one video (searchers/*.
+    MAX_TRAVERSAL_NODES) - `results` are still the best found so far, but
+    are not guaranteed complete."""
+
+
 class TemporalSearchBackendClient:
     def __init__(
         self,
@@ -113,7 +123,7 @@ class TemporalSearchBackendClient:
         top_k_each_query: int,
         gamma: float,
         searcher_type: LegacySearcherType,
-    ) -> list[LegacyTupleResult]:
+    ) -> LegacySearchOutcome:
         payload = {
             "query": list(queries),
             "top_k_tuple": top_k_tuple,
@@ -127,14 +137,17 @@ class TemporalSearchBackendClient:
         results = body.get("results")
         if not isinstance(results, list):
             raise BackendApiError("POST /temporal-search response is missing a results list")
-        return [
-            LegacyTupleResult(
-                score=float(item["score"]),
-                video_name=str(item["video_name"]),
-                frames=tuple(item["tuple"]),
-            )
-            for item in results
-        ]
+        return LegacySearchOutcome(
+            results=[
+                LegacyTupleResult(
+                    score=float(item["score"]),
+                    video_name=str(item["video_name"]),
+                    frames=tuple(item["tuple"]),
+                )
+                for item in results
+            ],
+            search_truncated=bool(body.get("search_truncated")),
+        )
 
     # -- adaptive pipeline -------------------------------------------------
 

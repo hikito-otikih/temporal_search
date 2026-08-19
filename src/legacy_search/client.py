@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-from urllib import request
+import socket
+from urllib import error, request
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
+
+from adaptive_search.exceptions import UpstreamSearchError
 
 from .schemas import QueryResponse
 
@@ -44,9 +47,46 @@ def _search_one(query: str, top_k: int) -> QueryResponse:
         method="POST",
     )
 
-    with request.urlopen(req, timeout=UPSTREAM_SEARCH_TIMEOUT_SECONDS) as response:
-        body = response.read().decode("utf-8")
-        return TypeAdapter(QueryResponse).validate_python(json.loads(body))
+    # Translated into UpstreamSearchError (mapped to a 502 by
+    # adaptive_search.router._raise_api_error) instead of letting a raw
+    # urllib/decode/validation exception propagate into _raise_api_error's
+    # generic ValueError-or-ValidationError fallback, which maps to a 422
+    # (client input error) - a slow/unreachable/misbehaving upstream is a
+    # real, expected failure mode caused by the *upstream* service, not a
+    # bug in the client's own request. UnicodeDecodeError (invalid UTF-8
+    # bytes) is itself a ValueError subclass and pydantic's ValidationError
+    # (valid JSON, wrong schema) is explicitly listed in that same fallback
+    # branch - both would otherwise be misreported as if the caller's
+    # request were malformed.
+    try:
+        with request.urlopen(req, timeout=UPSTREAM_SEARCH_TIMEOUT_SECONDS) as response:
+            body = response.read().decode("utf-8")
+    except error.HTTPError as exc:
+        raise UpstreamSearchError(
+            f"upstream /search failed with HTTP {exc.code}"
+        ) from exc
+    except (error.URLError, socket.timeout, TimeoutError) as exc:
+        raise UpstreamSearchError("upstream /search failed or timed out") from exc
+    except ConnectionError as exc:
+        # A reset/aborted/refused connection during response.read() is a
+        # plain OSError subclass, not wrapped in URLError like most urllib
+        # failures - without this it fell through to _raise_api_error's
+        # generic fallback, which doesn't recognize it either, producing an
+        # unstructured 500 instead of the 502 every other upstream failure
+        # mode gets.
+        raise UpstreamSearchError("upstream /search connection was reset") from exc
+    except UnicodeDecodeError as exc:
+        raise UpstreamSearchError("upstream /search returned invalid UTF-8") from exc
+    try:
+        decoded = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise UpstreamSearchError("upstream /search returned invalid JSON") from exc
+    try:
+        return TypeAdapter(QueryResponse).validate_python(decoded)
+    except ValidationError as exc:
+        raise UpstreamSearchError(
+            "upstream /search returned an invalid response schema"
+        ) from exc
 
 if __name__ == "__main__":
     # Example usage

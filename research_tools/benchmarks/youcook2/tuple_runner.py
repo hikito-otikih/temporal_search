@@ -162,13 +162,14 @@ def _rank_of_video(items: Sequence[Mapping[str, Any]], video_key: str, target: s
 def _run_legacy(
     backend: TemporalSearchBackendClient, group: VideoQueryGroup, config: TupleRunConfig
 ) -> dict[str, Any]:
-    results = backend.legacy_temporal_search(
+    outcome = backend.legacy_temporal_search(
         [text for _, text in group.events],
         top_k_tuple=config.top_k_tuple,
         top_k_each_query=config.top_k_each_query,
         gamma=config.gamma,
         searcher_type=_LEGACY_SEARCHER_TYPES[config.pipeline],
     )
+    results = outcome.results
     rank = None
     matched_frames: tuple[Mapping[str, Any], ...] | None = None
     for position, item in enumerate(results, 1):
@@ -181,6 +182,10 @@ def _run_legacy(
         "rank": rank,
         "unique_video_count": len({canonical_video_id(item.video_name) for item in results}),
         "top_score": results[0].score if results else None,
+        # Surfaced (not silently dropped) so a run summary can flag it -
+        # results are the best found so far, not guaranteed complete, and
+        # a clean-looking recall/rank summary would otherwise hide that.
+        "search_truncated": outcome.search_truncated,
     }
     if matched_frames is not None:
         row["event_timestamp_accuracy"] = event_timestamp_accuracy(

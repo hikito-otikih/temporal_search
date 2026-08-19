@@ -112,16 +112,43 @@ class RepairStandaloneContextTests(unittest.TestCase):
 
 class EnglishEchoValidationTests(unittest.TestCase):
     def test_english_query_identical_to_original_query_is_rejected(self) -> None:
+        # original_query left at _event()'s Vietnamese default (not
+        # overridden to English text) - the echo check only applies when
+        # the source actually needed translating; see the test below for
+        # the opposite, English-original case.
         common_query = 'chợ hoa Tết'
         analysis = _response(
-            original_query='the dragon moves its head',
             retrieval_queries_en=[
-                'the dragon moves its head',  # byte-identical to original_query
+                'Con rồng cử động đầu tại khu chợ hoa.',  # byte-identical to original_query
                 'A second, genuinely translated query.',
             ],
         )
         with self.assertRaises(SemanticValidationError):
             _validate_standalone_context(analysis, common_query)
+
+    def test_identical_copy_of_an_already_english_original_query_is_accepted(self) -> None:
+        # Regression test for a real reported bug: the echo check used to
+        # be unconditional, rejecting ANY retrieval_queries_en entry that
+        # byte-matched original_query - but when original_query is itself
+        # already English (a mixed-language or already-English source
+        # query), an unchanged copy IS the correct "translation"; there is
+        # nothing to translate. The old check misreported this valid, exact
+        # copy as if it were an untranslated echo of Vietnamese source text.
+        common_query = None
+        analysis = _response(
+            original_query='the dragon moves its head',
+            target_moment_vi='the dragon moves its head',
+            anchor_query='the dragon moves its head',
+            retrieval_queries_vi=[
+                'the dragon moves its head',
+                'the moment the dragon moves its head',
+            ],
+            retrieval_queries_en=[
+                'the dragon moves its head',  # byte-identical to original_query - now valid
+                'the moment the dragon moves its head',
+            ],
+        )
+        _validate_standalone_context(analysis, common_query)  # must not raise
 
     def test_english_query_left_in_vietnamese_is_rejected(self) -> None:
         # Regression test for a real reported bug: only a byte-identical
@@ -136,6 +163,43 @@ class EnglishEchoValidationTests(unittest.TestCase):
         analysis = _response(
             retrieval_queries_en=[
                 'Con rồng cử động đầu tại khu chợ hoa lần đầu tiên.',
+                'A second, genuinely translated query.',
+            ],
+        )
+        with self.assertRaises(SemanticValidationError):
+            _validate_standalone_context(analysis, common_query)
+
+    def test_vietnamese_without_diacritics_is_rejected(self) -> None:
+        # Regression test for a real reported bug: the old character-set
+        # regex could only ever match Unicode diacritic marks, so
+        # Vietnamese written with no diacritics at all (common real input,
+        # not a contrived edge case) contained no signature characters and
+        # sailed through as if it were English. Statistical language
+        # identification (py3langid) classifies this correctly without
+        # relying on script at all.
+        common_query = 'chợ hoa Tết'
+        analysis = _response(
+            retrieval_queries_en=[
+                'Con rong cu dong dau tai khu cho hoa.',
+                'A second, genuinely translated query.',
+            ],
+        )
+        with self.assertRaises(SemanticValidationError):
+            _validate_standalone_context(analysis, common_query)
+
+    def test_vietnamese_with_only_ordinary_diacritics_is_rejected(self) -> None:
+        # Regression test for a real reported bug: the old regex only
+        # matched the Latin Extended Additional range (stacked tone-mark
+        # vowels like "ề", "ố") plus đ/ơ/ư/ă, deliberately excluding
+        # ordinary single-diacritic Latin vowels (á, à, â...) to avoid
+        # flagging genuine loanwords - but plenty of real Vietnamese text
+        # uses only those ordinary diacritics and no signature character at
+        # all, e.g. "Múa lân màu vàng" ("yellow lion dance"), which the old
+        # regex missed completely despite being unambiguously Vietnamese.
+        common_query = 'chợ hoa Tết'
+        analysis = _response(
+            retrieval_queries_en=[
+                'Múa lân màu vàng.',
                 'A second, genuinely translated query.',
             ],
         )

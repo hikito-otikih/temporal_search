@@ -109,12 +109,30 @@ def get_video_priorities(
                 for event_id, timestamp in zip(event_ids, winner.timestamps)
                 if timestamp is not None
             }
+
+        # prioritized_video_ids reorders the response only - it never
+        # touches priority_score or any video's own tuple/region choice
+        # (distinct from fix_frame, which is scoped to its own video and
+        # deliberately does not affect cross-video ordering at all).
+        prioritized_order = bundle.session.constraints.prioritized_video_ids
+        if prioritized_order:
+            by_video_id = {item.video_id: item for item in priorities}
+            prioritized_set = set(prioritized_order)
+            front = [by_video_id[vid] for vid in prioritized_order if vid in by_video_id]
+            rest = [item for item in priorities if item.video_id not in prioritized_set]
+            priorities = front + rest
+
         page = priorities[offset : offset + limit]
 
         capability_available = False
         capability_reason: str | None = None
         if apply_boundary_refinement:
-            capability = boundary_refinement_runtime.capabilities()
+            runtime_spec = (
+                refinement_params.quality_embedding_model
+                if refinement_params.quality_profile_enabled
+                else refinement_params.embedding_model
+            )
+            capability = boundary_refinement_runtime.capabilities(runtime_spec)
             capability_available = capability.available
             capability_reason = capability.reason
 
@@ -216,6 +234,7 @@ def _video_priority_with_boundary_refinement(
                 anchor_seconds=anchor_seconds,
                 fps=metadata.fps,
                 duration_ms=metadata.duration_ms,
+                parameters=bundle.session.hyperparameters.boundary,
             )
         except VideoAssetNotFoundError:
             payload["boundary_refinement"] = {

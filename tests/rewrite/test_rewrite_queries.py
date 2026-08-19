@@ -274,6 +274,82 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.events[0].original_query, query)
         self.assertEqual(request_count, 1)
 
+    async def test_untranslated_english_is_rejected_even_without_common_query(
+        self,
+    ) -> None:
+        # Regression test for a real reported bug: the Vietnamese-signature
+        # check on retrieval_queries_en used to sit after
+        # `if not context_terms: return`, even though it reads only the EN
+        # field's own text and has nothing to do with common_query - so a
+        # query batch submitted with no common_query at all skipped this
+        # check entirely and would accept untranslated Vietnamese in an
+        # "English" field.
+        # Majority of words carry the Vietnamese signature - genuinely left
+        # untranslated, not just an English sentence with one preserved
+        # proper noun (see test_a_preserved_vietnamese_proper_noun_does_not_
+        # fail_english_validation below for that distinction).
+        query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
+        invalid = analysis_payload([query])
+        invalid['events'][0]['retrieval_queries_en'][0] = (
+            'Khoảnh khắc bốn chân chạm đất hoàn toàn.'
+        )
+        expected = analysis_payload([query])
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            content = invalid if len(requests) == 1 else expected
+            return httpx.Response(
+                200,
+                json={'message': {'content': json.dumps(content, ensure_ascii=False)}},
+            )
+
+        result = await rewrite_queries(
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(result.model_dump(), expected)
+        self.assertEqual(len(requests), 2)
+        retry_prompt = json.loads(requests[1].content)['messages'][1]['content']
+        self.assertIn('written in English', retry_prompt)
+
+    async def test_a_preserved_vietnamese_proper_noun_does_not_fail_english_validation(
+        self,
+    ) -> None:
+        # Regression test for a real reported bug: the Vietnamese-signature
+        # check used to reject on a single matching character anywhere in
+        # the field - a genuinely-translated English sentence that
+        # legitimately keeps a Vietnamese place name in its original form
+        # (e.g. "Hội An", a real town - place names are not translated)
+        # failed validation even though nothing was actually untranslated.
+        query = 'Khoảnh khắc người đi bộ qua phố cổ Hội An vào buổi tối.'
+        valid = analysis_payload([query])
+        valid['events'][0]['retrieval_queries_en'] = [
+            'A person walking through the old town of Hội An in the evening.',
+            'Someone strolling through Hội An ancient town at dusk.',
+        ]
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={'message': {'content': json.dumps(valid, ensure_ascii=False)}},
+            )
+
+        result = await rewrite_queries(
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(len(requests), 1)  # accepted on the first try, no retry
+        self.assertEqual(result.model_dump(), valid)
+
     async def test_retries_when_standalone_text_omits_common_context(self) -> None:
         common_query = 'Video múa lân với lân màu vàng đen trắng.'
         query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
@@ -392,6 +468,58 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
             'tìm các sự kiện sau', event.target_moment_vi.casefold()
         )
         self.assertTrue(event.inferred_information)
+
+    async def test_transient_transport_failure_retries_before_falling_back_to_repair(
+        self,
+    ) -> None:
+        # Regression test for a real reported bug: all four transport-failure
+        # branches checked "repair from the last semantic failure" BEFORE
+        # "retry if transport budget remains" - so a transient blip
+        # occurring any time after an earlier semantic failure always
+        # short-circuited into repair, even with retry budget untouched. A
+        # fresh, valid response (call 3 here) must win over the heuristic
+        # repair path whenever the transport retry budget can still reach it.
+        common_query = 'Video múa lân với lân màu vàng đen trắng.'
+        query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
+        invalid = analysis_payload([query])
+        invalid['events'][0]['target_moment_vi'] = 'Khoảnh khắc bốn chân chạm đất.'
+        invalid['events'][0]['retrieval_queries_vi'] = [
+            'Bốn chân chạm đất hoàn toàn.',
+            'Chủ thể vừa chạm đất.',
+        ]
+        expected = analysis_payload([query])
+        requests: list[httpx.Request] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            call_index = len(requests)
+            if call_index == 1:
+                # Semantic failure - populates last_structured_analysis/
+                # last_semantic_error, making the (buggy) repair path
+                # eligible from here on.
+                return httpx.Response(
+                    200,
+                    json={'message': {'content': json.dumps(invalid, ensure_ascii=False)}},
+                )
+            if call_index == 2:
+                # Transient transport failure with retry budget still
+                # available (transport_attempts=1 < MAX_TRANSPORT_ATTEMPTS=2).
+                return httpx.Response(503, json={'error': 'temporary'})
+            return httpx.Response(
+                200,
+                json={'message': {'content': json.dumps(expected, ensure_ascii=False)}},
+            )
+
+        result = await rewrite_queries(
+            common_query=common_query,
+            queries=[query],
+            api_key='test-api-key',
+            api_url=self.api_url,
+            transport=httpx.MockTransport(handler),
+        )
+
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(result.model_dump(), expected)
 
     async def test_uses_saved_candidate_when_repair_response_is_malformed(
         self,

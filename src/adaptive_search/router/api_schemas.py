@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from rewrite.schemas import RewriteResponse
+
 from ..schemas import (
     BoundaryType,
     EventDefinition,
@@ -28,6 +30,16 @@ class CreateSessionRequest(ApiModel):
     hyperparameters: SearchHyperparameters = Field(
         default_factory=SearchHyperparameters
     )
+
+
+class CreateSessionFromRewriteRequest(ApiModel):
+    """Creates a session from an already-computed rewrite analysis (e.g. one
+    a caller already fetched via `POST /rewrite` to preview) instead of raw
+    queries - `rewrite_bridge.build_session_plan` is pure and LLM-free, so
+    this never calls Ollama, unlike `/search-sessions/from-queries`."""
+
+    analysis: RewriteResponse
+    common_query: str | None = Field(default=None, max_length=8000)
 
 
 class EventPatch(ApiModel):

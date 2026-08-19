@@ -136,6 +136,50 @@ def _region_timestamp(
     return max(members, key=lambda candidate: candidate.raw_relevance_score).timestamp_seconds
 
 
+def _effective_region_timestamp(
+    region: TemporalRegion,
+    candidates_by_id: Mapping[str, SparseCandidate],
+    constraints: SearchConstraints | None,
+) -> float:
+    """`_region_timestamp`, except a genuine exact-timestamp pin
+    (fixed_video_id + fixed_timestamp_seconds) always wins over whatever
+    candidate happens to score best inside the selected region.
+
+    `_synthetic_fixed_regions` only synthesizes a placeholder region when no
+    existing region already covers the pinned timestamp; when one does
+    (`already_covered`), synthesis is skipped and `_region_allowed` narrows
+    the video to that existing region - but that region's own candidates
+    are real, resolvable ones, so plain `_region_timestamp` would report its
+    best-*scoring* candidate's timestamp, not the user's actual pin. For a
+    narrow (single-candidate) region those coincide; for a broad region
+    spanning several candidates they can differ substantially (measured: a
+    user pinned 42s, the response reported the region's best candidate at
+    10s instead). The condition mirrors `_region_allowed`'s own
+    exact_timestamp_pin check exactly, including containment, so this only
+    overrides when the selected region is genuinely the one the pin
+    resolved to - never for an unrelated region a caller passed in without
+    going through _region_allowed's filtering first.
+    """
+
+    event_constraint = (
+        constraints.event_constraints.get(region.event_id) if constraints is not None else None
+    )
+    if (
+        event_constraint is not None
+        and event_constraint.fixed_video_id == region.video_id
+        and event_constraint.fixed_timestamp_seconds is not None
+        and not (
+            event_constraint.fixed_frame_id is None
+            and event_constraint.fixed_region_id is not None
+        )
+        and region.start_seconds
+        <= event_constraint.fixed_timestamp_seconds
+        <= region.end_seconds
+    ):
+        return event_constraint.fixed_timestamp_seconds
+    return _region_timestamp(region, candidates_by_id)
+
+
 def _order_score(
     timestamps: Sequence[float | None],
     constraints: Sequence[tuple[int, int]] | None = None,
@@ -292,6 +336,10 @@ def assemble_region_tuples_for_video(
         return []
 
     n = len(event_ids)
+    # Computed here (not beside its own comment further down) so `push()`
+    # can close over it: it doubles as the heap-size bound below, which
+    # must be in place before the very first push.
+    effective_max_combinations = max(params.max_combinations_per_video, n + 1)
     pool_best_score = [
         (pools[i][0].normalized_coarse_score or 0.0) if pools[i][0] is not None else 0.0
         for i in range(n)
@@ -306,7 +354,7 @@ def assemble_region_tuples_for_video(
 
     def finalize(selected: tuple[TemporalRegion | None, ...]) -> TupleRankingResult | None:
         timestamps = tuple(
-            _region_timestamp(region, candidates_by_id) if region is not None else None
+            _effective_region_timestamp(region, candidates_by_id, constraints) if region is not None else None
             for region in selected
         )
         if _tuple_span_violation(timestamps, constraints):
@@ -380,11 +428,24 @@ def assemble_region_tuples_for_video(
                 heap,
                 (-upper_bound(achieved_sum, index), -index, next(tie_breaker), True, (achieved_sum, selected)),
             )
-            return
-        candidate = finalize(selected)
-        if candidate is None:
-            return  # gap/span violation - pruned, never enters the heap
-        heapq.heappush(heap, (-candidate.score, -n, next(tie_breaker), False, candidate))
+        else:
+            candidate = finalize(selected)
+            if candidate is None:
+                return  # gap/span violation - pruned, never enters the heap
+            heapq.heappush(heap, (-candidate.score, -n, next(tie_breaker), False, candidate))
+        # Trimmed after every single push, not once per expansion's whole
+        # fan-out - a pool of thousands of regions used to push every child
+        # (see the comment above the fan-out loop below: that's correctness-
+        # required, not the bug) before the old trim, sitting only after the
+        # entire `for region in pools[index]` loop, ever ran once. Peak heap
+        # size could then reach the pool size regardless of how small
+        # effective_max_combinations was (measured: cap=1, 5,000-region pool
+        # -> heap of 5,000). Trimming per-push instead keeps the heap
+        # bounded at every point, using each entry's real already-computed
+        # priority exactly as before - not a raw-score proxy.
+        if len(heap) > effective_max_combinations:
+            heap[:] = heapq.nsmallest(effective_max_combinations, heap)
+            heapq.heapify(heap)
 
     push(0.0, 0, ())
 
@@ -397,7 +458,6 @@ def assemble_region_tuples_for_video(
     # events at all), which is not "safely bounded," just silently empty.
     # The configured cap otherwise still applies unchanged - this only
     # raises a cap that was too small to ever succeed at all.
-    effective_max_combinations = max(params.max_combinations_per_video, n + 1)
 
     results: list[TupleRankingResult] = []
     expansions = 0
@@ -413,6 +473,31 @@ def assemble_region_tuples_for_video(
             continue
         achieved_sum, selected = payload
         index = len(selected)
+        # Every child of this expansion must be pushed - NOT just the top
+        # few by raw coarse score. That truncation was tried and found
+        # unsound: it's only valid reasoning for a *partial* push, where
+        # upper_bound() adds the same optimistic max_order_bonus to every
+        # sibling regardless of identity, so a higher region_score strictly
+        # raises the bound. It does NOT hold for the *last* event in a
+        # tuple, whose children go straight to finalize() instead - that
+        # computes the tuple's REAL order/gap terms from the actual chosen
+        # timestamp, which a lower-coarse-score-but-correctly-ordered region
+        # can win decisively (order_weight defaults to 0.8). Truncating by
+        # raw coarse score before finalize() runs could throw away the
+        # eventual winner outright (measured: a cap tight enough to keep
+        # only the wrong-order top-scorer produced a tuple scoring 0.145,
+        # while including the correctly-ordered lower-scorer produced 1.73).
+        # Memory is bounded inside push() itself instead (trimmed after
+        # every single push, not just once per expansion), which compares
+        # every entry's REAL computed priority globally, not a raw-score
+        # proxy compared only among one expansion's own siblings. The search
+        # can never pop more than effective_max_combinations entries in
+        # total, so any entry ranked beyond that many places in the heap's
+        # own priority order could never be reached anyway - trimming down
+        # to the best effective_max_combinations entries only ever discards
+        # such provably-unreachable entries, so it cannot discard an
+        # eventual winner, unlike the per-expansion truncation described
+        # above.
         for region in pools[index]:
             region_score = (region.normalized_coarse_score or 0.0) if region is not None else 0.0
             push(achieved_sum + region_score, index + 1, selected + (region,))

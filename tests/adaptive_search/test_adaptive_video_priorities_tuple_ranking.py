@@ -105,6 +105,15 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.client = TestClient(app)
         self._original_provider = boundary_refinement_runtime.frame_provider
         self._original_embedder = boundary_refinement_runtime.embedder
+        # Fakes are installed before any session is created (not after, as
+        # individual tests used to do) so that _apply_runtime_embedding_default
+        # stamps *this* embedder's own pinned identity into a new session's
+        # hyperparameters.refinement.embedding_model, instead of whatever real
+        # model happens to be process-configured (often revision="main",
+        # which the live-refinement identity check now correctly rejects as
+        # unpinned - see refinement_runtime._validate_embedder_identity).
+        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
+        boundary_refinement_runtime.embedder = FakeEmbedder()
 
     def tearDown(self):
         self.client.close()
@@ -152,6 +161,42 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         item = response.json()["items"][0]
         self.assertEqual(item["video_id"], "video_full")
         self.assertTrue(0.0 <= item["priority_score"] <= 1.0)
+
+    def test_prioritized_video_id_floats_to_front_without_changing_its_score(self):
+        # video_a scores higher than video_b on pure retrieval evidence - a
+        # naive "boost the score" implementation would be observable in
+        # priority_score; prioritized_video_ids must reorder the response
+        # only, leaving every video's own score untouched (distinct from
+        # fix_frame, which is scoped to its own video and never reorders
+        # videos against each other - see the PUT below, no event_constraints
+        # involved at all).
+        session_id = self._create_session([event("e1", "cut onion")])
+        self._submit_candidates(
+            session_id, ["e1"],
+            [
+                candidate("c1", session_id, "e1", "video_a", 10.0, 0.9),
+                candidate("c2", session_id, "e1", "video_b", 20.0, 0.3),
+            ],
+        )
+        baseline = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities").json()
+        self.assertEqual(baseline["items"][0]["video_id"], "video_a")
+        baseline_scores = {item["video_id"]: item["priority_score"] for item in baseline["items"]}
+
+        session = self.client.get(f"/v1/search-sessions/{session_id}").json()
+        revision = session["session"]["revision"]
+        response = self.client.put(
+            f"/v1/search-sessions/{session_id}/constraints",
+            json={
+                "expected_revision": revision,
+                "constraints": {"prioritized_video_ids": ["video_b"]},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+        reordered = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities").json()
+        self.assertEqual([item["video_id"] for item in reordered["items"]], ["video_b", "video_a"])
+        reordered_scores = {item["video_id"]: item["priority_score"] for item in reordered["items"]}
+        self.assertEqual(reordered_scores, baseline_scores)
 
     def test_fixed_frame_is_respected_by_ranking_itself_not_only_by_boundary_refinement(self):
         # Distinct from test_user_fixed_frame_still_wins_over_tuple_ranking
@@ -243,9 +288,6 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
             ],
         )
 
-        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
-        boundary_refinement_runtime.embedder = FakeEmbedder()
-
         response = self.client.get(
             f"/v1/search-sessions/{session_id}/video-priorities",
             params={"apply_boundary_refinement": "true"},
@@ -325,8 +367,6 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
                 candidate("c3", session_id, "e2", "video_full", 50.0, 0.9),
             ],
         )
-        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
-        boundary_refinement_runtime.embedder = FakeEmbedder()
 
         response = self.client.get(
             f"/v1/search-sessions/{session_id}/video-priorities",
@@ -356,8 +396,6 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
                 candidate("c4", session_id, "e2", "video_full", 60.0, 0.5),
             ],
         )
-        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
-        boundary_refinement_runtime.embedder = FakeEmbedder()
 
         fix_response = self.client.post(
             f"/v1/search-sessions/{session_id}/commands/fix-frame",

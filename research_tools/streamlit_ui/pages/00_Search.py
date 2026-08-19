@@ -4,11 +4,17 @@ Type what you're looking for (one moment per line, in order) and get back
 ranked videos with the matched moment's timestamp, a thumbnail, and
 on-demand playback. Everything else in this app ("Developer Tools") is for
 inspecting pipeline internals; this page is the product.
+
+Orchestration only - the reusable, independently-tested pieces live in
+components/search_*.py:
+- search_rewrite_preview: preview + making it authoritative for Search
+- search_retrieval_controls: "Advanced options"
+- search_constraints: reject/prioritize/fix-frame session mutations
+- search_keyframe_browser: the two manual frame-picking UIs
 """
 
 from __future__ import annotations
 
-import base64
 import re
 from pathlib import Path
 from typing import Any
@@ -17,7 +23,11 @@ import streamlit as st
 
 from _bootstrap import bootstrap, configure_sidebar, get_api_client, get_media_resolver
 from components.api_status import show_connection_error
-from models.ui_models import format_timestamp
+from components.search_constraints import prioritize_item, reject_item
+from components.search_keyframe_browser import render_event_keyframe_browser, render_frame_fixer
+from components.search_retrieval_controls import render_retrieval_controls
+from components.search_rewrite_preview import get_authoritative_analysis, render_preview_controls
+from models.ui_models import format_timestamp, normalize_adaptive_items
 from services.api_client import ApiError, ConnectionFailure, TemporalApiClient
 from services.media_resolver import MediaResolver
 from state import keys as K
@@ -88,35 +98,6 @@ def _parse_display_timestamp(value: str | None) -> float | None:
     return hours * 3600 + minutes * 60 + seconds
 
 
-def _normalize_adaptive_items(page: dict[str, Any], event_count: int) -> list[dict[str, Any]]:
-    items = []
-    for entry in page.get("items", []):
-        boundary = entry.get("boundary_refinement") or {}
-        moments = []
-        if boundary.get("status") == "applied":
-            for position, event in enumerate(boundary.get("events") or [], start=1):
-                moments.append(
-                    {
-                        "label": f"moment {position}",
-                        "event_id": event.get("event_id"),
-                        "seconds": event.get("refined_seconds"),
-                        "refined": not event.get("used_fallback", False),
-                        "source": event.get("source", "auto"),
-                    }
-                )
-        video_id = entry.get("video_id")
-        items.append(
-            {
-                "video_id": video_id,
-                "reject_key": video_id,
-                "coverage_label": f"Matched {entry.get('event_coverage', 0)}/{event_count} moments",
-                "priority_score": entry.get("priority_score"),
-                "moments": moments,
-            }
-        )
-    return items
-
-
 def _run_adaptive_search(
     client: TemporalApiClient,
     lines: list[str],
@@ -124,9 +105,30 @@ def _run_adaptive_search(
     limit: int,
     apply_refinement: bool,
     common_query: str | None = None,
+    retrieval_overrides: dict[str, int] | None = None,
+    analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    session = client.create_session_from_queries(queries=lines, common_query=common_query)
+    # `analysis` is the exact, already-computed rewrite result a fresh
+    # Preview produced - when given, the session is built from it directly
+    # (zero further LLM calls, guaranteed to match what was previewed).
+    # Without a fresh preview on hand there is nothing to reuse, so this
+    # still falls back to rewriting `lines` itself, same as before Preview
+    # existed.
+    if analysis is not None:
+        session = client.create_session_from_rewrite(analysis=analysis, common_query=common_query)
+    else:
+        session = client.create_session_from_queries(queries=lines, common_query=common_query)
     session_id = session.session.get("id")
+    if retrieval_overrides:
+        # commands/retrieve re-fetches the session's own current revision
+        # server-side rather than trusting a client-supplied one, so this
+        # patch (which bumps the revision by 1) needs no revision tracking
+        # of its own here - it just has to land before retrieve_session().
+        client.patch_hyperparameters(
+            session_id,
+            expected_revision=int(session.session.get("revision", 0)),
+            patch={"retrieval": retrieval_overrides},
+        )
     all_events = [
         {
             "event_id": event.get("event_id"),
@@ -134,7 +136,14 @@ def _run_adaptive_search(
         }
         for event in session.session.get("events", [])
     ]
-    client.retrieve_session(session_id, top_k=RETRIEVE_TOP_K)
+    # commands/retrieve's own top_k is the raw per-variant fetch count from
+    # the upstream sparse search - hyperparameters.retrieval.top_n_per_variant
+    # only *trims* what was already fetched (fuse_candidates_rrf), so top_k
+    # must be at least as large as top_n_per_variant or that control (and
+    # top_n_fused, downstream of it) is silently capped by whatever top_k
+    # happens to be, no matter what the user configured.
+    top_k = (retrieval_overrides or {}).get("top_n_per_variant", RETRIEVE_TOP_K)
+    client.retrieve_session(session_id, top_k=top_k)
     page = client.get_video_priorities(
         session_id,
         limit=limit,
@@ -148,7 +157,7 @@ def _run_adaptive_search(
         "display_limit": limit,
         "apply_refinement": apply_refinement,
         "capability": page.get("boundary_refinement_capability") or {},
-        "items": _normalize_adaptive_items(page, len(lines)),
+        "items": normalize_adaptive_items(page, len(lines)),
     }
 
 
@@ -204,148 +213,11 @@ def _run_legacy_search(
         "apply_refinement": apply_refinement,
         "capability": response.get("boundary_refinement_capability") or {},
         "items": items,
+        # True if a video's backtracking search hit its node budget before
+        # exploring exhaustively (searchers/*.MAX_TRAVERSAL_NODES) - results
+        # are still the best found so far, but not guaranteed complete.
+        "search_truncated": bool(response.get("search_truncated")),
     }
-
-
-def _reject_item(client: TemporalApiClient, reject_key: str) -> None:
-    """Mark one result wrong. Adaptive: reject its video server-side and
-    re-rank, so the next-best video (already computed, just outside the
-    previous cutoff) takes its place. Legacy: no session to mutate, so this
-    just hides it and reveals the next item already sitting in the
-    over-fetched buffer.
-    """
-    rejected: set[str] = st.session_state.setdefault(K.SEARCH_REJECTED_IDS, set())
-    rejected.add(reject_key)
-
-    payload = st.session_state.get(K.SEARCH_RESULTS)
-    if not payload or payload.get("pipeline") != "adaptive_coarse" or not payload.get("session_id"):
-        return
-    try:
-        session = client.get_session(payload["session_id"])
-        revision = int(session.session.get("revision", 0))
-        client.replace_constraints(
-            payload["session_id"],
-            expected_revision=revision,
-            constraints={"rejected_video_ids": sorted(rejected)},
-        )
-        page = client.get_video_priorities(
-            payload["session_id"],
-            limit=payload["display_limit"],
-            apply_boundary_refinement=payload["apply_refinement"],
-        )
-        payload["items"] = _normalize_adaptive_items(page, payload["event_count"])
-        payload["capability"] = page.get("boundary_refinement_capability") or {}
-        st.session_state[K.SEARCH_RESULTS] = payload
-    except ApiError as exc:
-        st.session_state[K.SEARCH_ERROR] = ("api", exc)
-
-
-def _confirm_fixed_frame(
-    client: TemporalApiClient,
-    *,
-    session_id: str,
-    event_id: str,
-    video_id: str,
-    frame: dict[str, Any],
-) -> None:
-    """Persist a manually-picked frame, then re-fetch so the fix is
-    reflected (video-priorities treats a fixed event as authoritative and
-    skips re-refining it).
-    """
-    try:
-        session = client.get_session(session_id)
-        revision = int(session.session.get("revision", 0))
-        client.fix_frame(
-            session_id,
-            expected_revision=revision,
-            event_id=event_id,
-            video_id=video_id,
-            frame_id=int(frame["pts_ms"]),
-            timestamp_seconds=float(frame["timestamp_seconds"]),
-        )
-        payload = st.session_state.get(K.SEARCH_RESULTS)
-        if payload and payload.get("session_id") == session_id:
-            page = client.get_video_priorities(
-                session_id,
-                limit=payload["display_limit"],
-                apply_boundary_refinement=payload["apply_refinement"],
-            )
-            payload["items"] = _normalize_adaptive_items(page, payload["event_count"])
-            payload["capability"] = page.get("boundary_refinement_capability") or {}
-            st.session_state[K.SEARCH_RESULTS] = payload
-    except ApiError as exc:
-        st.session_state[K.SEARCH_ERROR] = ("api", exc)
-
-
-def _render_frame_fixer(
-    client: TemporalApiClient,
-    *,
-    session_id: str,
-    event_id: str,
-    video_id: str,
-    anchor_seconds: float,
-    flag_key: str,
-) -> None:
-    # The 31-frame window is centered on `center_key`, which starts at the
-    # detected/default anchor but can be moved anywhere in the video with the
-    # step buttons or the jump-to box below - not limited to browsing only
-    # around whatever the pipeline originally found.
-    center_key = f"center_{flag_key}"
-    if center_key not in st.session_state:
-        st.session_state[center_key] = float(anchor_seconds)
-
-    nav = st.columns([1, 1, 1, 1, 2])
-    if nav[0].button("- 10s", key=f"back10_{flag_key}"):
-        st.session_state[center_key] = max(0.0, st.session_state[center_key] - 10.0)
-    if nav[1].button("- 1s", key=f"back1_{flag_key}"):
-        st.session_state[center_key] = max(0.0, st.session_state[center_key] - 1.0)
-    if nav[2].button("+ 1s", key=f"fwd1_{flag_key}"):
-        st.session_state[center_key] += 1.0
-    if nav[3].button("+ 10s", key=f"fwd10_{flag_key}"):
-        st.session_state[center_key] += 10.0
-    with nav[4]:
-        st.number_input(
-            "Jump to (seconds)",
-            min_value=0.0,
-            step=1.0,
-            key=center_key,
-            label_visibility="collapsed",
-        )
-    center_seconds = float(st.session_state[center_key])
-
-    try:
-        preview = client.get_frame_preview(video_id, anchor_seconds=center_seconds, radius_frames=15)
-    except ApiError as exc:
-        st.error(f"Could not load frames: {exc.message}")
-        return
-    frames = preview.get("frames", [])
-    if not frames:
-        st.caption("No frames available for this video.")
-        return
-    st.caption(f"{len(frames)} frames around {format_timestamp(center_seconds)} - click one to pick it.")
-    columns_per_row = 6
-    for row_start in range(0, len(frames), columns_per_row):
-        row = frames[row_start : row_start + columns_per_row]
-        cols = st.columns(len(row))
-        for col, frame in zip(cols, row):
-            with col:
-                image_bytes = base64.b64decode(frame["image_base64"])
-                st.image(image_bytes, use_container_width=True)
-                choose_label = format_timestamp(frame["timestamp_seconds"])
-                if frame["offset"] == 0:
-                    choose_label += " *"
-                if st.button(choose_label, key=f"pick_{flag_key}_{frame['pts_ms']}"):
-                    with st.spinner("Saving…"):
-                        _confirm_fixed_frame(
-                            client,
-                            session_id=session_id,
-                            event_id=event_id,
-                            video_id=video_id,
-                            frame=frame,
-                        )
-                    st.session_state[flag_key] = False
-                    st.session_state.pop(center_key, None)
-                    st.rerun()
 
 
 def _render_moments(
@@ -370,11 +242,17 @@ def _render_moments(
             if can_fix:
                 row = st.columns([4, 1])
                 row[0].caption(label)
-                flag_key = f"show_frames_{index}_{video_id}_{moment['event_id']}"
+                # session_id-scoped - video_id/event_id/index can all repeat
+                # across unrelated searches (a new session from clicking
+                # "Search" again), and without it a stale "show the frame
+                # picker" toggle (or its jump-to-seconds position) from a
+                # previous session would silently carry over into a new one.
+                flag_key = f"show_frames_{session_id}_{index}_{video_id}_{moment['event_id']}"
                 if row[1].button("Fix", key=f"fixbtn_{flag_key}"):
                     st.session_state[flag_key] = not st.session_state.get(flag_key, False)
                 if st.session_state.get(flag_key):
-                    _render_frame_fixer(
+                    render_frame_fixer(
+                        st.session_state,
                         client,
                         session_id=session_id,
                         event_id=moment["event_id"],
@@ -400,11 +278,12 @@ def _render_moments(
                 event_id = missing_event.get("event_id")
                 row = st.columns([4, 1])
                 row[0].caption(f"{missing_event.get('label')} - not found in this video")
-                flag_key = f"show_frames_{index}_{video_id}_{event_id}"
+                flag_key = f"show_frames_{session_id}_{index}_{video_id}_{event_id}"
                 if row[1].button("Fix", key=f"fixbtn_{flag_key}"):
                     st.session_state[flag_key] = not st.session_state.get(flag_key, False)
                 if st.session_state.get(flag_key):
-                    _render_frame_fixer(
+                    render_frame_fixer(
+                        st.session_state,
                         client,
                         session_id=session_id,
                         event_id=event_id,
@@ -412,6 +291,13 @@ def _render_moments(
                         anchor_seconds=default_anchor,
                         flag_key=flag_key,
                     )
+
+    if session_id and all_events:
+        with st.expander("Browse keyframes by event"):
+            render_event_keyframe_browser(
+                st.session_state, client, resolver,
+                session_id=session_id, video_id=video_id, all_events=all_events, index=index,
+            )
 
     video_path = resolver.resolve_video(video_id) if resolver.available() else None
     if video_path is None:
@@ -423,7 +309,7 @@ def _render_moments(
                 f"{m['label']} ({format_timestamp(m['seconds'])})": m["seconds"] for m in playable_moments
             }
             chosen_label = st.selectbox(
-                "Jump to", options=list(options.keys()), key=f"jump_{index}_{video_id}"
+                "Jump to", options=list(options.keys()), key=f"jump_{session_id}_{index}_{video_id}"
             )
             start_time = int(round(options[chosen_label]))
         else:
@@ -444,6 +330,12 @@ def _render_results(
             "Timestamp refinement is unavailable right now "
             f"({capability.get('reason') or 'runtime not configured'}). "
             "Showing unrefined results."
+        )
+    if payload.get("search_truncated"):
+        st.warning(
+            "The search hit its traversal budget before exploring every "
+            "combination for at least one video - these are the best "
+            "results found so far, not guaranteed to be exhaustive."
         )
 
     if not items:
@@ -485,10 +377,18 @@ def _render_results(
                     all_events=payload.get("all_events"),
                 )
             with cols[2]:
+                # Prioritize (reorder to top-1) is deliberately separate
+                # from "Not this one" (filter, changes set membership) -
+                # neither one touches the other's mechanism.
+                if payload.get("pipeline") == "adaptive_coarse" and index != 0:
+                    if st.button("Prioritize to top", key=f"prioritize_{index}_{video_id}"):
+                        with st.spinner("Updating…"):
+                            prioritize_item(st.session_state, client, video_id)
+                        st.rerun()
                 reject_key = item.get("reject_key")
                 if st.button("Not this one", key=f"reject_{index}_{reject_key}"):
                     with st.spinner("Updating…"):
-                        _reject_item(client, reject_key)
+                        reject_item(st.session_state, client, reject_key)
                     st.rerun()
 
 
@@ -529,24 +429,18 @@ if preview_moments:
 pipeline_label = st.radio("Search mode", options=list(PIPELINES.keys()), horizontal=True)
 pipeline = PIPELINES[pipeline_label]
 
-with st.expander("Advanced options"):
-    result_limit = st.slider("Number of results", min_value=5, max_value=50, value=20, step=5)
-    apply_refinement = st.checkbox(
-        "Refine timestamps (slower, experimental)",
-        value=False,
-        help=(
-            "Runs a real GPU decode+embed scan around every matched moment of every "
-            "result to snap onto the exact frame, instead of the coarse retrieval "
-            "anchor. Cost scales with results x moments, no other cap - e.g. 50 "
-            "results x 3 moments measured at ~65s. In practice the timestamp "
-            "adjustment itself is usually small (a fraction of a second)."
-        ),
+retrieval_controls = render_retrieval_controls(pipeline=pipeline)
+result_limit = retrieval_controls.result_limit
+apply_refinement = retrieval_controls.apply_refinement
+retrieval_overrides = retrieval_controls.retrieval_overrides
+
+if pipeline == "adaptive_coarse":
+    common_query, lines = _parse_query_block(query_text)
+    render_preview_controls(
+        st.session_state, client,
+        common_query=common_query, lines=lines, query_text=query_text,
     )
-    if apply_refinement and result_limit > 20:
-        st.caption(
-            f"{result_limit} results with refinement on can take a while (roughly "
-            f"1-1.5s per result per moment) - lower 'Number of results' for a faster search."
-        )
+
 search_clicked = st.button("Search", type="primary")
 
 if search_clicked:
@@ -563,12 +457,21 @@ if search_clicked:
         try:
             with st.spinner("Searching…"):
                 if pipeline == "adaptive_coarse":
+                    # Reuse a fresh preview (still matching the current query
+                    # text) verbatim instead of rewriting again - the whole
+                    # point of previewing is that what you reviewed is what
+                    # Search actually uses. A missing or stale preview (never
+                    # previewed, or the text changed since) has nothing valid
+                    # to reuse, so this falls back to _run_adaptive_search's
+                    # own fresh rewrite, same as if Preview had never existed.
                     results = _run_adaptive_search(
                         client,
                         lines,
                         limit=result_limit,
                         apply_refinement=apply_refinement,
                         common_query=common_query,
+                        retrieval_overrides=retrieval_overrides,
+                        analysis=get_authoritative_analysis(st.session_state, query_text),
                     )
                 else:
                     searcher_type = "TemporalSearcher" if pipeline == "legacy_temporal" else "AmbiguousSearcher"
@@ -591,7 +494,7 @@ error = st.session_state.get(K.SEARCH_ERROR)
 if error:
     kind, payload = error
     if kind == "connection":
-        show_connection_error(payload)
+        show_connection_error(payload, key="search_retry")
     elif kind == "api":
         st.error(f"{type(payload).__name__}: {payload.message}")
     else:

@@ -5,6 +5,7 @@ import os
 from typing import Sequence
 
 import httpx
+import py3langid as langid
 from pydantic import ValidationError
 
 from .config import (
@@ -23,7 +24,6 @@ from .constants import (
     OLLAMA_RETRY_DELAY_SECONDS,
     SYSTEM_PROMPT,
     TRANSIENT_OLLAMA_STATUSES,
-    VIETNAMESE_SIGNATURE_PATTERN,
 )
 from .exceptions import (
     ConfigurationError,
@@ -59,6 +59,32 @@ def _clean_common_context(common_query: str | None) -> str:
 def _matched_context_terms(text: str, context_terms: Sequence[str]) -> list[str]:
     text_terms = set(CONTEXT_TERM_PATTERN.findall(text.casefold()))
     return [term for term in context_terms if term in text_terms]
+
+
+def _is_english(text: str) -> bool:
+    """Statistical language identification (py3langid, classifying against
+    its full ~97-language set - not restricted to just en/vi) in place of
+    the Vietnamese-only character-set heuristic this replaced.
+
+    That regex only matched a narrow Latin Extended Additional range plus
+    đ/ơ/ư/ă, deliberately excluding ordinary single-diacritic vowels (á, à,
+    â...) to avoid flagging genuine loanwords (café, naïve) - which meant it
+    missed plain-diacritic Vietnamese ("Múa lân màu vàng") entirely, and,
+    being script-based at all, could never catch Vietnamese written without
+    any diacritics ("Mua lan mau vang"), which is common in real input.
+
+    Classifying the whole string is also a better fit than the old
+    word-fraction threshold for tolerating one preserved proper noun (e.g.
+    "Hội An") inside an otherwise-English sentence: a single foreign word's
+    n-grams do not flip a whole sentence's aggregate statistics, so this
+    still accepts that case without needing to special-case it. Restricting
+    langid's candidate set to just {en, vi} was tried and measured worse -
+    forcing a binary choice pushed short, diacritic-free Vietnamese toward
+    "en" (the less-wrong of only two options) far more often than letting
+    the model pick from its full language set, where such text reliably
+    lands on some other non-English language instead."""
+    language, _confidence = langid.classify(text)
+    return language == 'en'
 
 
 def build_analysis_prompt(
@@ -177,10 +203,6 @@ def _validate_standalone_context(
     analysis: RewriteResponse,
     common_query: str | None,
 ) -> None:
-    context_terms = _extract_context_terms(common_query)
-    if not context_terms:
-        return
-
     # retrieval_queries_en gets no term-matching check below (context_terms
     # are extracted from the Vietnamese common_query - checking whether
     # translated English text literally contains Vietnamese words is not
@@ -190,26 +212,49 @@ def _validate_standalone_context(
     # requiring it (build_analysis_prompt's REQUIRED_STANDALONE_CONTEXT
     # block): the LLM echoing original_query back unchanged as an EN
     # "translation" instead of actually translating and expanding it.
+    #
+    # Unconditional - unlike everything below, this reads only
+    # retrieval_queries_en's own content, never common_query's extracted
+    # terms, so it must run even when no common_query (hence no
+    # context_terms) was supplied at all. It used to sit after the
+    # `if not context_terms: return` below, which meant a query batch
+    # submitted with no common_query skipped this check entirely.
     for index, event in enumerate(analysis.events):
         original_normalized = event.original_query.strip().casefold()
+        # original_query is itself almost always Vietnamese in this
+        # pipeline, so identical EN/original text normally means "not
+        # translated" - but when a caller's original_query already IS
+        # English (a mixed-language or already-English source query), the
+        # only correct "translation" is that same text unchanged, and the
+        # echo check must not reject a genuinely correct copy as if it were
+        # untranslated Vietnamese.
+        original_is_english = _is_english(event.original_query)
         for query_index, en_query in enumerate(event.retrieval_queries_en):
-            if en_query.strip().casefold() == original_normalized:
+            if (
+                not original_is_english
+                and en_query.strip().casefold() == original_normalized
+            ):
                 raise SemanticValidationError(
                     f'events[{index}].retrieval_queries_en[{query_index}] must be '
                     'an English translation carrying the same standalone context, '
                     'not a literal copy of original_query'
                 )
-            # A literal-echo check alone lets an LLM leave the field in (or
-            # paraphrase it into) Vietnamese pass as long as it doesn't
-            # byte-match original_query - genuine English text never
-            # contains these characters, so this catches "not actually
-            # translated" independent of the echo check above.
-            if VIETNAMESE_SIGNATURE_PATTERN.search(en_query):
+            # Independent of the echo check above: catches the LLM leaving
+            # the field in (or paraphrasing it into) Vietnamese - or any
+            # other non-English language - even when it doesn't byte-match
+            # original_query. Always enforced, even when original_query was
+            # itself English: retrieval_queries_en must still actually be
+            # English text, just not necessarily *different* text.
+            if not _is_english(en_query):
                 raise SemanticValidationError(
                     f'events[{index}].retrieval_queries_en[{query_index}] must be '
-                    'written in English - it contains Vietnamese-specific '
-                    'characters, so it was not actually translated'
+                    'written in English - language identification classified it '
+                    'as something else, so it was not actually translated'
                 )
+
+    context_terms = _extract_context_terms(common_query)
+    if not context_terms:
+        return
 
     minimum_matches = min(2, len(context_terms))
     for index, event in enumerate(analysis.events):
@@ -257,6 +302,17 @@ def _repair_standalone_context(
     context_terms = _extract_context_terms(common_query)
     clean_context = _clean_common_context(common_query)
     if not context_terms or not clean_context:
+        # Nothing below can prefix missing context onto anything - but the
+        # semantic failure that triggered repair might be the
+        # context-independent echo/Vietnamese-in-EN check instead (the only
+        # one _validate_standalone_context can raise when there are no
+        # context_terms at all), which this branch does nothing to fix
+        # either. Re-validate rather than assume "no context terms" means
+        # "nothing left to check": if the failure was that check, it still
+        # fails here and _repair_standalone_context_or_fail converts it into
+        # a clean error, instead of this function silently returning the
+        # still-broken analysis as if repair had succeeded.
+        _validate_standalone_context(analysis, common_query)
         return analysis
 
     repaired = analysis.model_copy(deep=True)
@@ -450,6 +506,18 @@ async def rewrite_queries(
                     transport_attempts,
                     MAX_TRANSPORT_ATTEMPTS,
                 )
+                # Retry-if-budget-remains is checked BEFORE falling back to
+                # repair-from-last-semantic-failure in all four branches
+                # below - a fresh, successful Ollama call is strictly better
+                # than the repair path's heuristic patching, so a transient
+                # transport blip must not short-circuit into repair while
+                # retry budget is still available. It used to check repair
+                # eligibility first, so any transport hiccup occurring after
+                # an earlier semantic failure always spent the repair path
+                # immediately, wasting whatever transport retries remained.
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
@@ -458,9 +526,6 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
-                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
-                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
-                    continue
                 raise OllamaTimeoutError('Ollama request timed out') from exc
             except httpx.RequestError as exc:
                 transport_attempts += 1
@@ -470,6 +535,9 @@ async def rewrite_queries(
                     transport_attempts,
                     MAX_TRANSPORT_ATTEMPTS,
                 )
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
@@ -478,9 +546,6 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
-                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
-                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
-                    continue
                 raise OllamaServiceError('Could not connect to Ollama') from exc
 
             if response.status_code == 429:
@@ -491,6 +556,9 @@ async def rewrite_queries(
                     transport_attempts,
                     MAX_TRANSPORT_ATTEMPTS,
                 )
+                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
                 if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
@@ -499,9 +567,6 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
-                if transport_attempts < MAX_TRANSPORT_ATTEMPTS:
-                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
-                    continue
                 raise OllamaRateLimitError('Ollama rate limit exceeded')
             if response.is_error:
                 transport_attempts += 1
@@ -513,6 +578,12 @@ async def rewrite_queries(
                     MAX_TRANSPORT_ATTEMPTS,
                 )
                 if (
+                    response.status_code in TRANSIENT_OLLAMA_STATUSES
+                    and transport_attempts < MAX_TRANSPORT_ATTEMPTS
+                ):
+                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
+                    continue
+                if (
                     last_structured_analysis is not None
                     and last_semantic_error is not None
                 ):
@@ -520,12 +591,6 @@ async def rewrite_queries(
                         last_structured_analysis,
                         common_query,
                     )
-                if (
-                    response.status_code in TRANSIENT_OLLAMA_STATUSES
-                    and transport_attempts < MAX_TRANSPORT_ATTEMPTS
-                ):
-                    await asyncio.sleep(OLLAMA_RETRY_DELAY_SECONDS)
-                    continue
                 raise OllamaServiceError(
                     f'Ollama returned HTTP status {response.status_code}'
                 )

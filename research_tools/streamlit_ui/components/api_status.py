@@ -98,7 +98,11 @@ def stage_status_badge(name: str, active: bool) -> str:
     return f"🔘 {name}"
 
 
-def show_connection_error(exc: ConnectionFailure) -> None:
+def show_connection_error(exc: ConnectionFailure, *, key: str = "connection_error") -> None:
+    """`key` must be unique per call site on a page - two independent error
+    states (e.g. a failed Preview and a failed Search) can both be visible
+    on the same render, and Streamlit crashes with StreamlitDuplicateElementId
+    if their "Retry" buttons share the same auto-generated key."""
     st.error(f"Cannot reach backend: {exc.message}")
-    if st.button("Retry", use_container_width=True):
+    if st.button("Retry", use_container_width=True, key=key):
         st.rerun()

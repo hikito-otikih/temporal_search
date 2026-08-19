@@ -49,6 +49,7 @@ class GroupedParsingTests(unittest.TestCase):
 
 class FakeBackendHandler(BaseHTTPRequestHandler):
     legacy_results: list[dict[str, object]] = []
+    legacy_search_truncated: bool = False
     video_priorities: list[dict[str, object]] = []
     requests: list[tuple[str, str, dict[str, object] | None]] = []
 
@@ -79,7 +80,11 @@ class FakeBackendHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
         self._record("POST", payload)
         if self.path == "/temporal-search":
-            self._json({"query": payload["query"], "results": self.legacy_results})
+            self._json({
+                "query": payload["query"],
+                "results": self.legacy_results,
+                "search_truncated": self.legacy_search_truncated,
+            })
         elif self.path == "/v1/search-sessions":
             self._json(
                 {
@@ -111,6 +116,7 @@ class TupleRunnerTests(unittest.TestCase):
 
     def setUp(self) -> None:
         FakeBackendHandler.requests = []
+        FakeBackendHandler.legacy_search_truncated = False
 
     def _config(self, pipeline: str, **overrides) -> TupleRunConfig:
         return TupleRunConfig(
@@ -170,6 +176,36 @@ class TupleRunnerTests(unittest.TestCase):
         payload = next(item for method, path, item in FakeBackendHandler.requests if path == "/temporal-search")
         self.assertEqual(payload["searcher_type"], "TemporalSearcher")
         self.assertNotIn("ground-truth", json.dumps(payload))  # GT id never sent to backend
+
+    def test_legacy_search_truncated_is_surfaced_not_silently_dropped(self) -> None:
+        # Regression test for a real reported bug: the backend's
+        # search_truncated flag (true when a video's backtracking search hit
+        # its node budget before exploring exhaustively) was read from the
+        # response but then discarded - a benchmark run summary had no way
+        # to tell truncated results from exhaustive ones, so it could report
+        # incomplete results as if the search had been complete.
+        group = self._group()
+        FakeBackendHandler.legacy_results = [
+            {
+                "score": 0.8,
+                "video_name": "ground-truth.mp4",
+                "tuple": [
+                    {"frame_index": 3, "timestamp": "0:15", "score": 0.4, "query_id": 0},
+                    {"frame_index": 4, "timestamp": "0:35", "score": 0.4, "query_id": 1},
+                ],
+            },
+        ]
+        FakeBackendHandler.legacy_search_truncated = True
+        with tempfile.TemporaryDirectory() as output_dir:
+            _metrics, rows = run_tuple_benchmark(
+                [group],
+                output_dir,
+                self._config("legacy_temporal"),
+                {"type": "fixture"},
+                "digest",
+                progress_every=0,
+            )
+        self.assertTrue(rows[0]["search_truncated"])
 
     def test_adaptive_coarse_uses_video_priorities_endpoint(self) -> None:
         group = self._group()
