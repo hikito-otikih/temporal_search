@@ -646,6 +646,19 @@ class VideoPriority(StrictModel):
     mean_best_event_score: UnitScore
     min_best_event_score: UnitScore
     distinctness: UnitScore
+    # Order-checked pairs, drawn from `TupleRankingResult.order_score` -
+    # [-1, 1], not a UnitScore: an uncovered event drops any constraint
+    # touching it (see tuple_ranking._order_score), so this reflects only
+    # the pairs that were actually checkable for this video's winning tuple,
+    # not an absolute measure of how "in order" the full event set is.
+    order_score: RawScore
+    # Pre-normalization tuple score (region_mean_score + order_weight *
+    # order_score - gap_penalty) - unbounded, not a UnitScore. Exists so
+    # ties in priority_score (common once robust_sigmoid's clip_z=8.0 clamp
+    # is hit - see region_tuple_ranking_results.md) can still be broken by
+    # a caller, and so the order/coverage tradeoff baked into priority_score
+    # is inspectable instead of opaque.
+    raw_score: RawScore
     priority_score: UnitScore
 
 

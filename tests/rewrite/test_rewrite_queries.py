@@ -289,11 +289,22 @@ class RewriteQueriesClientTests(unittest.IsolatedAsyncioTestCase):
         # untranslated, not just an English sentence with one preserved
         # proper noun (see test_a_preserved_vietnamese_proper_noun_does_not_
         # fail_english_validation below for that distinction).
+        #
+        # retrieval_queries_en_language[0] is set to "not_en" alongside the
+        # bad text - self-report is the authoritative gate now (see
+        # _validate_standalone_context's own comment for why: a live
+        # YouCook2 benchmark found py3langid alone occasionally
+        # misclassifies genuinely correct English and, unlike self-report,
+        # was never observed to miss a real untranslated case), so a
+        # regression test for "untranslated Vietnamese gets rejected" must
+        # simulate a model that correctly flags its own mistake, not just
+        # bad text with no signal of it.
         query = 'Khoảnh khắc bốn chân chạm đất đầu tiên.'
         invalid = analysis_payload([query])
         invalid['events'][0]['retrieval_queries_en'][0] = (
             'Khoảnh khắc bốn chân chạm đất hoàn toàn.'
         )
+        invalid['events'][0]['retrieval_queries_en_language'][0] = 'not_en'
         expected = analysis_payload([query])
         requests: list[httpx.Request] = []
 

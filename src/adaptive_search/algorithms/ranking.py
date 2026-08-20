@@ -110,6 +110,14 @@ def prioritize_videos(
                 mean_best_event_score=mean_score,
                 min_best_event_score=minimum_score,
                 distinctness=distinctness,
+                # This algorithm is an independent per-event argmax (see
+                # tuple_ranking.py's module docstring) - it never checks
+                # cross-event ordering, so there's no order_score to report.
+                # It also never passes its score through robust_sigmoid, so
+                # there's no separate raw-vs-normalized distinction either;
+                # raw_score is the same weighted blend as priority_score.
+                order_score=0.0,
+                raw_score=priority_score,
                 priority_score=priority_score,
             )
         )

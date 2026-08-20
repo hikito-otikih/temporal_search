@@ -63,10 +63,24 @@ def build_session_plan(
                 ),
             )
         )
+        # original_query (the caller's own unmodified text) is included as
+        # a variant, replacing one of the two retrieval_queries_vi
+        # paraphrases rather than adding a 5th (query_variants_per_event
+        # defaults to 4 - retrieval.py rejects more). Measured on a 60-video
+        # live YouCook2 benchmark: retrieval using only the LLM's own
+        # elaborated variants (previous behavior) landed below a baseline
+        # that searched with this exact original_query text directly -
+        # recall@1 0.267 vs 0.300, MRR 0.352 vs 0.378 - meaning the RRF
+        # fusion pool never contained the one signal that outperformed
+        # everything the rewrite stage produced on its own. Including it
+        # here lets fusion combine that strong signal with the LLM's
+        # variants (multi-language coverage, common-query-distilled
+        # context) instead of choosing between them.
         retrieval_variants[event_id] = tuple(
             dict.fromkeys(
                 [
-                    *event.retrieval_queries_vi,
+                    event.original_query,
+                    *event.retrieval_queries_vi[1:],
                     *event.retrieval_queries_en,
                 ]
             )

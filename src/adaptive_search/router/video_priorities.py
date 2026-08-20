@@ -77,7 +77,8 @@ def get_video_priorities(
         distinctness_weight = refinement_params.video_distinctness_weight
         weight_sum = other_weight + distinctness_weight
 
-        blended: list[tuple[str, float, object, float]] = []
+        raw_by_video = dict(tuple_ranking)
+        blended: list[tuple[str, float, object, float, float, int]] = []
         for video_id, raw_priority_score in normalized_by_video.items():
             winner = tuples_by_video[video_id][0]
             covered_timestamps = [t for t in winner.timestamps if t is not None]
@@ -85,14 +86,19 @@ def get_video_priorities(
             priority_score = (
                 other_weight * raw_priority_score + distinctness_weight * distinctness
             ) / weight_sum
-            blended.append((video_id, priority_score, winner, distinctness))
+            coverage = sum(1 for region_id in winner.region_ids if region_id is not None)
+            blended.append((video_id, priority_score, winner, distinctness, raw_by_video[video_id], coverage))
 
         priorities = []
         tuple_anchors_by_video: dict[str, dict[str, float]] = {}
-        for video_id, priority_score, winner, distinctness in sorted(
-            blended, key=lambda item: (-item[1], item[0])
+        # priority_score (post robust_sigmoid, which clamps at clip_z=8.0 -
+        # see algorithms/scoring.py) ties easily once several videos' raw
+        # scores all exceed the clamp threshold. Break ties with the raw,
+        # pre-normalization score, then with event coverage, before finally
+        # falling back to video_id for determinism.
+        for video_id, priority_score, winner, distinctness, raw_score, coverage in sorted(
+            blended, key=lambda item: (-item[1], -item[4], -item[5], item[0])
         ):
-            coverage = sum(1 for region_id in winner.region_ids if region_id is not None)
             priorities.append(
                 VideoPriority(
                     video_id=video_id,
@@ -101,6 +107,8 @@ def get_video_priorities(
                     mean_best_event_score=winner.region_mean_score,
                     min_best_event_score=min(winner.region_scores),
                     distinctness=distinctness,
+                    order_score=winner.order_score,
+                    raw_score=raw_score,
                     priority_score=priority_score,
                 )
             )

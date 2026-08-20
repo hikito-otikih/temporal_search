@@ -24,6 +24,30 @@ CONTEXT_TERM_PATTERN = re.compile(r'[^\W\d_]+', flags=re.UNICODE)
 # missed plain single-diacritic Vietnamese ("Múa lân màu vàng") and, being
 # script-based at all, could never catch Vietnamese written without any
 # diacritics ("Mua lan mau vang").
+#
+# Regression found by an 18-video live YouCook2 benchmark (real Ollama
+# calls, not synthetic text): trusting only langid's top-1 guess
+# (classify()) made genuinely correct English sentences fail repeatedly and
+# irrecoverably - "cutting cheese into cubes during salad preparation" and
+# "sprinkling salt on garlic during Caesar salad preparation" were both
+# misclassified as non-English on every one of 3 separate live generations
+# (different phrasings each time), exhausting MAX_VALIDATION_ATTEMPTS and
+# failing the entire video's rewrite call - a hard regression the old regex
+# never had (pure ASCII text always passed it trivially). In every observed
+# false positive, English was a close runner-up, never confidently
+# rejected: e.g. "The chef chops vegetables quickly." scored fr=-97.17 vs
+# en=-97.98, and "sprinkling salt..." scored id=-96.22 vs en=-105.91 - both
+# well within this margin of the top pick. _is_english() therefore checks
+# rank() (every language's score), not just the top-1 label: English counts
+# if it is the top pick OR within LANGID_ENGLISH_MARGIN of it. Swept
+# empirically against the 4 confirmed false positives plus the 40-case
+# accuracy corpus: margin=10 fixes all 4 false positives with zero English
+# regression (still 20/20), at the cost of one additional ASCII-Vietnamese
+# miss (14/16 vs 15/16 without the margin) - acceptable since undiacritized
+# Vietnamese detection already had a lower bar and is backstopped by the
+# model's own retrieval_queries_en_language self-report, while a hard
+# failure on correct English has no such backstop.
+LANGID_ENGLISH_MARGIN = 10.0
 COMMON_QUERY_INSTRUCTION_SUFFIX = re.compile(
     r'[\s,;:.]*(?:hãy\s+)?tìm\s+(?:các\s+|những\s+)?'
     r'sự\s+kiện(?:\s+sau(?:\s+đây)?)?[\s.!:;]*$',

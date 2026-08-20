@@ -18,6 +18,7 @@ from .constants import (
     COMMON_QUERY_INSTRUCTION_SUFFIX,
     CONTEXT_STOPWORDS,
     CONTEXT_TERM_PATTERN,
+    LANGID_ENGLISH_MARGIN,
     MAX_RETRY_RESPONSE_CHARS,
     MAX_TRANSPORT_ATTEMPTS,
     MAX_VALIDATION_ATTEMPTS,
@@ -82,9 +83,20 @@ def _is_english(text: str) -> bool:
     forcing a binary choice pushed short, diacritic-free Vietnamese toward
     "en" (the less-wrong of only two options) far more often than letting
     the model pick from its full language set, where such text reliably
-    lands on some other non-English language instead."""
-    language, _confidence = langid.classify(text)
-    return language == 'en'
+    lands on some other non-English language instead.
+
+    Uses rank() (every language's score), not just classify()'s top-1 -
+    see LANGID_ENGLISH_MARGIN's own comment for the real, live-observed
+    regression this fixes: trusting only the top-1 label made genuinely
+    correct English fail repeatedly and irrecoverably, because in every
+    observed false positive English was a close runner-up, not a
+    confidently-rejected outsider."""
+    ranked = langid.rank(text)
+    top_language, top_score = ranked[0]
+    if top_language == 'en':
+        return True
+    english_score = dict(ranked).get('en', float('-inf'))
+    return english_score >= top_score - LANGID_ENGLISH_MARGIN
 
 
 def build_analysis_prompt(
@@ -246,33 +258,29 @@ def _validate_standalone_context(
             # itself English: retrieval_queries_en must still actually be
             # English text, just not necessarily *different* text.
             #
-            # Two independent signals, neither trusted alone. py3langid is a
-            # fast, free, statistical check - measured ~95% accurate on a
-            # 40-case benchmark, but with real failure modes: ~83% recall on
-            # Vietnamese written without diacritics (it has no notion of
-            # vocabulary, just character n-gram statistics, and stripping
-            # diacritics removes most of its signal), and occasional false
-            # positives on legitimate English (e.g. misclassified "The chef
-            # chops vegetables quickly." as French). The LLM's own self-
-            # report (retrieval_queries_en_language) has complementary
-            # strengths - real vocabulary knowledge should catch
-            # undiacritized Vietnamese that py3langid misses - and
-            # complementary weaknesses - a model asked to verify its own
-            # output can rubber-stamp instead of genuinely re-checking, and
-            # both signals only exist for the query the model itself
-            # produced, so neither is a general-purpose language detector.
-            # Either one flagging non-English is enough to reject; both
-            # would need to be wrong (in the same direction, on the same
-            # text) for bad output to slip through.
+            # self-report is the authoritative gate; py3langid disagreement
+            # alone is observability, not grounds for rejection - a real
+            # 18-video live YouCook2 run found py3langid (even with
+            # LANGID_ENGLISH_MARGIN's rank-based tolerance) still
+            # occasionally misclassifies genuinely correct English, and
+            # because that misclassification is often systematic for a
+            # given phrasing (not random per-attempt noise), retrying just
+            # reproduces similarly-phrased text that fails the same way,
+            # exhausting MAX_VALIDATION_ATTEMPTS and hard-failing the whole
+            # video's rewrite call - every single one of 5 observed
+            # failures across ~27 live videos had self_report correctly
+            # saying "en" while only py3langid disagreed; zero observed
+            # cases went the other way (self-report missing something
+            # py3langid caught). Blocking on py3langid alone was
+            # demonstrated to cause real harm; nothing has yet demonstrated
+            # self-report alone is insufficient. If that changes (a
+            # disagreement log shows self-report wrongly saying "en" on
+            # genuinely untranslated text), py3langid's role here should be
+            # revisited - this is a decision made from the evidence
+            # available now, not a claim that py3langid is worthless.
             self_reported_not_english = (
                 event.retrieval_queries_en_language[query_index] == 'not_en'
             )
-            # Computed unconditionally (not only when self-report already
-            # passed) so a disagreement between the two signals is always
-            # observable, even on the reject path below - the only way to
-            # find out, from real traffic rather than a hand-picked
-            # benchmark, how often each one actually catches something the
-            # other misses.
             langid_not_english = not _is_english(en_query)
             if self_reported_not_english != langid_not_english:
                 logger.warning(
@@ -287,12 +295,6 @@ def _validate_standalone_context(
                     f'events[{index}].retrieval_queries_en[{query_index}] must be '
                     'written in English - the model itself flagged this entry as '
                     'not_en in retrieval_queries_en_language'
-                )
-            if langid_not_english:
-                raise SemanticValidationError(
-                    f'events[{index}].retrieval_queries_en[{query_index}] must be '
-                    'written in English - language identification classified it '
-                    'as something else, so it was not actually translated'
                 )
 
     context_terms = _extract_context_terms(common_query)

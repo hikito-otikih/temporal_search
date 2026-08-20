@@ -136,8 +136,15 @@ class RewriteBridgeTests(unittest.TestCase):
             common_query="Video múa lân.",
         )
         self.assertEqual(plan.events[0].event_id, "evt0")
+        # original_query is included as a variant (replacing one of the two
+        # retrieval_queries_vi paraphrases) so retrieval always has access
+        # to the caller's own unmodified text, not only the LLM's
+        # elaborated phrasings - see build_session_plan's own comment.
         self.assertEqual(
-            plan.retrieval_variants["evt0"][0], expected.events[0].retrieval_queries_vi[0]
+            plan.retrieval_variants["evt0"][0], expected.events[0].original_query
+        )
+        self.assertIn(
+            expected.events[0].retrieval_queries_en[0], plan.retrieval_variants["evt0"]
         )
 
 

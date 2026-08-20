@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from rewrite.exceptions import SemanticValidationError
 from rewrite.schemas import RewriteResponse
 from rewrite.service import (
+    _is_english,
     _repair_standalone_context,
     _repair_standalone_context_or_fail,
     _validate_standalone_context,
@@ -157,55 +158,46 @@ class EnglishEchoValidationTests(unittest.TestCase):
         # (rather than translated) into Vietnamese - or just left the field
         # in Vietnamese outright - passed validation and returned HTTP 200.
         # This query is not identical to original_query, so the echo check
-        # alone would miss it; the Vietnamese-signature check catches it on
-        # script alone (chợ/hoa/lần/đầu/tiên all carry Vietnamese diacritics
-        # outside plain English text).
+        # alone would miss it.
+        #
+        # retrieval_queries_en_language[0] is set to "not_en" - self-report
+        # is the authoritative gate (see _validate_standalone_context's own
+        # comment), so this simulates a model that correctly notices its
+        # own untranslated output, not bad text with no signal of it.
         common_query = 'chợ hoa Tết'
         analysis = _response(
             retrieval_queries_en=[
                 'Con rồng cử động đầu tại khu chợ hoa lần đầu tiên.',
                 'A second, genuinely translated query.',
             ],
+            retrieval_queries_en_language=['not_en', 'en'],
         )
         with self.assertRaises(SemanticValidationError):
             _validate_standalone_context(analysis, common_query)
 
-    def test_vietnamese_without_diacritics_is_rejected(self) -> None:
-        # Regression test for a real reported bug: the old character-set
-        # regex could only ever match Unicode diacritic marks, so
-        # Vietnamese written with no diacritics at all (common real input,
-        # not a contrived edge case) contained no signature characters and
-        # sailed through as if it were English. Statistical language
-        # identification (py3langid) classifies this correctly without
-        # relying on script at all.
+    def test_langid_disagreement_alone_does_not_reject_when_self_report_says_en(self) -> None:
+        # Regression test for a real reported bug: a live 18-video YouCook2
+        # benchmark found py3langid alone (even with LANGID_ENGLISH_MARGIN's
+        # rank-based tolerance) still occasionally misclassifies genuinely
+        # correct English - and because the misclassification is often
+        # systematic for a given phrasing, retrying just reproduces
+        # similarly-phrased text that fails the same way, exhausting
+        # MAX_VALIDATION_ATTEMPTS and hard-failing the whole video's
+        # rewrite call even though the output was correct. Every observed
+        # failure had self_report correctly saying "en" while only
+        # py3langid disagreed - blocking on that disagreement was the bug,
+        # not a feature. This uses the same ASCII-Vietnamese sentence the
+        # old test suite used to assert *rejection* on py3langid's verdict
+        # alone; the point now is the opposite - self-report overrides it.
         common_query = 'chợ hoa Tết'
         analysis = _response(
             retrieval_queries_en=[
                 'Con rong cu dong dau tai khu cho hoa.',
                 'A second, genuinely translated query.',
             ],
+            retrieval_queries_en_language=['en', 'en'],
         )
-        with self.assertRaises(SemanticValidationError):
-            _validate_standalone_context(analysis, common_query)
-
-    def test_vietnamese_with_only_ordinary_diacritics_is_rejected(self) -> None:
-        # Regression test for a real reported bug: the old regex only
-        # matched the Latin Extended Additional range (stacked tone-mark
-        # vowels like "ề", "ố") plus đ/ơ/ư/ă, deliberately excluding
-        # ordinary single-diacritic Latin vowels (á, à, â...) to avoid
-        # flagging genuine loanwords - but plenty of real Vietnamese text
-        # uses only those ordinary diacritics and no signature character at
-        # all, e.g. "Múa lân màu vàng" ("yellow lion dance"), which the old
-        # regex missed completely despite being unambiguously Vietnamese.
-        common_query = 'chợ hoa Tết'
-        analysis = _response(
-            retrieval_queries_en=[
-                'Múa lân màu vàng.',
-                'A second, genuinely translated query.',
-            ],
-        )
-        with self.assertRaises(SemanticValidationError):
-            _validate_standalone_context(analysis, common_query)
+        _validate_standalone_context(analysis, common_query)  # must not raise
 
     def test_self_reported_not_en_is_rejected_even_when_langid_is_fooled(self) -> None:
         # Regression test for exactly why two independent signals matter:
@@ -240,6 +232,46 @@ class EnglishEchoValidationTests(unittest.TestCase):
             ],
         )
         _validate_standalone_context(analysis, common_query)
+
+
+class IsEnglishDetectionTests(unittest.TestCase):
+    """Direct unit tests for _is_english()'s own detection accuracy -
+    separate from EnglishEchoValidationTests, which exercises the full
+    _validate_standalone_context flow where self-report (not _is_english
+    alone) determines rejection. These preserve the regression coverage for
+    what _is_english() itself can and can't detect, independent of how its
+    verdict is used."""
+
+    def test_diacritic_vietnamese_is_detected(self) -> None:
+        # The old character-set regex only matched a narrow Latin Extended
+        # Additional range plus đ/ơ/ư/ă, missing plain single-diacritic
+        # Vietnamese like this entirely.
+        self.assertFalse(_is_english('Múa lân màu vàng.'))
+
+    def test_ascii_vietnamese_is_usually_detected(self) -> None:
+        # Not guaranteed (statistical, not script-based) - but this exact
+        # sentence is a measured, reliable catch.
+        self.assertFalse(_is_english('Con rong cu dong dau tai khu cho hoa.'))
+
+    def test_preserved_vietnamese_proper_noun_does_not_fail_english(self) -> None:
+        self.assertTrue(
+            _is_english('A person walking through the old town of Hội An in the evening.')
+        )
+
+    def test_previously_false_positive_english_sentences_now_pass(self) -> None:
+        # Regression test for a real reported bug: LANGID_ENGLISH_MARGIN's
+        # own comment has the full story - classify()'s top-1-only verdict
+        # misclassified these two live-observed, genuinely correct English
+        # sentences as non-English on every one of 3 separate live
+        # generations, which (before self-report became the authoritative
+        # gate) hard-failed the whole video's rewrite call. In both cases
+        # English was a close runner-up (measured via langid.rank()), not a
+        # confidently-rejected outsider - exactly what rank()+margin fixes.
+        self.assertTrue(_is_english('cutting cheese into cubes during salad preparation'))
+        self.assertTrue(
+            _is_english('sprinkling salt on garlic during Caesar salad preparation')
+        )
+        self.assertTrue(_is_english('The chef chops vegetables quickly.'))
 
 
 if __name__ == '__main__':

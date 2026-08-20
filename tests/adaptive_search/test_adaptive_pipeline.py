@@ -134,9 +134,12 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertEqual(
             len(session["retrieval_variants"]["evt0"]), 4
         )
+        # original_query (the caller's own unmodified text) is included as
+        # a variant, replacing one of the two retrieval_queries_vi
+        # paraphrases - see build_session_plan's own comment for why.
         self.assertEqual(
             session["retrieval_variants"]["evt1"][0],
-            "Con lân màu vàng đen trắng thực hiện hành động ở sự kiện 1.",
+            queries[1],
         )
     def test_from_rewrite_creates_the_same_session_with_zero_llm_calls(self):
         # No rewrite_queries_and_build_plan patch/mock anywhere in this test -
@@ -170,9 +173,12 @@ class AdaptivePipelineTests(unittest.TestCase):
         )
         self.assertEqual(session["events"][0]["boundary_type"], "onset")
         self.assertEqual(len(session["retrieval_variants"]["evt0"]), 4)
+        # original_query (the caller's own unmodified text) is included as
+        # a variant, replacing one of the two retrieval_queries_vi
+        # paraphrases - see build_session_plan's own comment for why.
         self.assertEqual(
             session["retrieval_variants"]["evt1"][0],
-            "Con lân màu vàng đen trắng thực hiện hành động ở sự kiện 1.",
+            queries[1],
         )
 
     def test_from_rewrite_rejects_unknown_request_fields(self):

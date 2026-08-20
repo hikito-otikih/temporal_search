@@ -172,6 +172,32 @@ class TemporalSearchBackendClient:
             raise BackendApiError("POST /v1/search-sessions response is missing session.id")
         return str(session_id)
 
+    def create_session_from_rewrite(
+        self,
+        analysis: Mapping[str, Any],
+        *,
+        common_query: str | None = None,
+    ) -> str:
+        """POST /v1/search-sessions/from-rewrite - builds a session from an
+        already-computed rewrite analysis (e.g. a cached one) instead of raw
+        queries. Never calls the LLM, unlike create_adaptive_session()
+        combined with a live rewrite call would."""
+        payload: dict[str, Any] = {"analysis": dict(analysis)}
+        if common_query is not None:
+            payload["common_query"] = common_query
+        status, body = self._request("POST", "/v1/search-sessions/from-rewrite", payload)
+        if status != 201 or not isinstance(body, Mapping):
+            raise BackendApiError(
+                f"POST /v1/search-sessions/from-rewrite returned HTTP {status}: {body}"
+            )
+        session = body.get("session")
+        session_id = session.get("id") if isinstance(session, Mapping) else None
+        if not session_id:
+            raise BackendApiError(
+                "POST /v1/search-sessions/from-rewrite response is missing session.id"
+            )
+        return str(session_id)
+
     def retrieve(self, session_id: str, *, top_k: int) -> int:
         status, body = self._request(
             "POST",
