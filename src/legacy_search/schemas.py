@@ -39,7 +39,11 @@ class Candidate(ClusteredCandidate):
 
 
 class QueryResponse(BaseModel):
-    query: str
+    # /text_retrieve echoes the query back as a one-element list (its
+    # sibling endpoint /text_rrf_generated_queries_search shares this same
+    # response schema and echoes multiple expanded queries there) - not a
+    # single string.
+    query: list[str]
     results: list[Candidate]
 
 

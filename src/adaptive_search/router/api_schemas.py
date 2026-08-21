@@ -11,6 +11,7 @@ from rewrite.schemas import RewriteResponse
 from ..schemas import (
     BoundaryType,
     EventDefinition,
+    FixFrameEntry,
     SearchHyperparameters,
     SearchConstraints,
     SparseCandidate,
@@ -100,6 +101,11 @@ class FixFrameRequest(ApiModel):
     frame_id: int = Field(ge=0)
     timestamp_seconds: float = Field(ge=0.0, allow_inf_nan=False)
     region_id: str | None = Field(default=None, min_length=1)
+
+
+class BatchFixFrameRequest(ApiModel):
+    expected_revision: int = Field(ge=0)
+    fixes: list[FixFrameEntry] = Field(min_length=1, max_length=1000)
 
 
 class ClearEventConstraintRequest(ApiModel):

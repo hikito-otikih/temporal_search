@@ -41,7 +41,7 @@ def search_queries(queries: str | list[str], top_k: int) -> QueryResponse | list
 def _search_one(query: str, top_k: int) -> QueryResponse:
     payload = json.dumps({"query": query, "top_k": top_k}).encode("utf-8")
     req = request.Request(
-        f"{upstream_search_url()}/search",
+        f"{upstream_search_url()}/text_retrieve",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -63,10 +63,10 @@ def _search_one(query: str, top_k: int) -> QueryResponse:
             body = response.read().decode("utf-8")
     except error.HTTPError as exc:
         raise UpstreamSearchError(
-            f"upstream /search failed with HTTP {exc.code}"
+            f"upstream /text_retrieve failed with HTTP {exc.code}"
         ) from exc
     except (error.URLError, socket.timeout, TimeoutError) as exc:
-        raise UpstreamSearchError("upstream /search failed or timed out") from exc
+        raise UpstreamSearchError("upstream /text_retrieve failed or timed out") from exc
     except ConnectionError as exc:
         # A reset/aborted/refused connection during response.read() is a
         # plain OSError subclass, not wrapped in URLError like most urllib
@@ -74,18 +74,18 @@ def _search_one(query: str, top_k: int) -> QueryResponse:
         # generic fallback, which doesn't recognize it either, producing an
         # unstructured 500 instead of the 502 every other upstream failure
         # mode gets.
-        raise UpstreamSearchError("upstream /search connection was reset") from exc
+        raise UpstreamSearchError("upstream /text_retrieve connection was reset") from exc
     except UnicodeDecodeError as exc:
-        raise UpstreamSearchError("upstream /search returned invalid UTF-8") from exc
+        raise UpstreamSearchError("upstream /text_retrieve returned invalid UTF-8") from exc
     try:
         decoded = json.loads(body)
     except json.JSONDecodeError as exc:
-        raise UpstreamSearchError("upstream /search returned invalid JSON") from exc
+        raise UpstreamSearchError("upstream /text_retrieve returned invalid JSON") from exc
     try:
         return TypeAdapter(QueryResponse).validate_python(decoded)
     except ValidationError as exc:
         raise UpstreamSearchError(
-            "upstream /search returned an invalid response schema"
+            "upstream /text_retrieve returned an invalid response schema"
         ) from exc
 
 if __name__ == "__main__":

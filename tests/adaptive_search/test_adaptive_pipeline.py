@@ -68,8 +68,7 @@ def analysis(queries):
 def fake_upstream_client():
     def fake_transport(url, payload, timeout):
         return {
-            "query": payload["query"],
-            "top_k": payload["top_k"],
+            "query": [payload["query"]],
             "results": [
                 {
                     "video_name": "video-a.mp4",
@@ -310,7 +309,7 @@ class AdaptivePipelineTests(unittest.TestCase):
 
     def test_retrieve_maps_upstream_errors_to_bad_gateway(self):
         def broken_transport(url, payload, timeout):
-            return {"query": "different", "results": []}
+            return {"query": ["different"], "results": []}
 
         client = UpstreamSearchClient(transport=broken_transport)
         session_id = self.create_session_from_queries(["Sự kiện một."])

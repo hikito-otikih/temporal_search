@@ -105,6 +105,7 @@ def fuse_candidates_rrf(
                     raw_relevance_score=bucket["rrf_score"],
                     normalized_relevance_score=None,
                     query_variant="rrf:" + ",".join(variants),
+                    watch_url=representative.watch_url,
                 )
             )
 

@@ -25,7 +25,7 @@ class AdaptiveUpstreamTests(unittest.TestCase):
         def fake_transport(url, payload, timeout):
             calls.append((url, dict(payload), timeout))
             return {
-                "query": payload["query"],
+                "query": [payload["query"]],
                 "english_query": payload["query"],
                 "results": [
                     {
@@ -62,7 +62,7 @@ class AdaptiveUpstreamTests(unittest.TestCase):
     def test_exact_timestamp_from_upstream_is_preferred(self):
         def fake_transport(_url, payload, _timeout):
             return {
-                "query": payload["query"],
+                "query": [payload["query"]],
                 "results": [
                     {
                         "video_name": "video.mp4",
@@ -84,20 +84,18 @@ class AdaptiveUpstreamTests(unittest.TestCase):
     def test_invalid_external_schema_is_not_silently_accepted(self):
         client = UpstreamSearchClient(
             transport=lambda _url, _payload, _timeout: {
-                "query": "q",
+                "query": ["q"],
                 "results": [{"video_name": "v.mp4", "score": 1.0}],
             }
         )
         with self.assertRaisesRegex(UpstreamSearchError, "schema"):
             client.search("q", 1)
 
-    def test_query_and_top_k_contract_mismatches_are_rejected(self):
+    def test_echoed_query_mismatch_and_result_count_overrun_are_rejected(self):
         responses = (
-            {"query": "different", "top_k": 1, "results": []},
-            {"query": "q", "top_k": 2, "results": []},
+            {"query": ["different"], "results": []},
             {
-                "query": "q",
-                "top_k": 1,
+                "query": ["q"],
                 "results": [
                     {
                         "video_name": "a.mp4",

@@ -31,13 +31,17 @@ class UpstreamHit(BaseModel):
     timestamp: str | None = None
     timestamp_seconds: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
     score: float = Field(allow_inf_nan=False)
+    watch_url: str | None = None
 
 
 class UpstreamResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
 
-    query: str = Field(min_length=1)
-    top_k: int | None = Field(default=None, ge=1)
+    # /text_retrieve echoes the query back as a one-element list (its
+    # sibling endpoint /text_rrf_generated_queries_search shares this same
+    # response schema and echoes multiple expanded queries there) - not a
+    # single string.
+    query: list[str] = Field(min_length=1)
     results: list[UpstreamHit]
 
 
@@ -100,26 +104,22 @@ class UpstreamSearchClient:
             raise ValueError("top_k must be in [1, 10000]")
         try:
             payload = self._transport(
-                f"{self.base_url}/search",
+                f"{self.base_url}/text_retrieve",
                 {"query": text, "top_k": top_k},
                 self.timeout_seconds,
             )
             response = UpstreamResponse.model_validate(payload)
         except ValidationError as exc:
             raise UpstreamSearchError(
-                "upstream /search returned an invalid response schema"
+                "upstream /text_retrieve returned an invalid response schema"
             ) from exc
-        if response.query.strip() != text:
+        if response.query != [text]:
             raise UpstreamSearchError(
-                "upstream /search echoed a different query"
-            )
-        if response.top_k is not None and response.top_k != top_k:
-            raise UpstreamSearchError(
-                "upstream /search echoed a different top_k"
+                "upstream /text_retrieve echoed a different query"
             )
         if len(response.results) > top_k:
             raise UpstreamSearchError(
-                "upstream /search returned more hits than requested top_k"
+                "upstream /text_retrieve returned more hits than requested top_k"
             )
         return response
 
@@ -169,6 +169,7 @@ class UpstreamSearchClient:
                         timestamp_seconds=timestamp,
                         raw_relevance_score=hit.score,
                         query_variant=variant.variant_id,
+                        watch_url=hit.watch_url,
                     )
                 )
         return candidates

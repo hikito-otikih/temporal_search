@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from ..dependencies import adaptive_service
 
 from .api_schemas import (
+    BatchFixFrameRequest,
     ClearEventConstraintRequest,
     FixFrameRequest,
     MarkVideosRequest,
@@ -48,6 +49,24 @@ def fix_frame(session_id: str, request: FixFrameRequest):
             frame_id=request.frame_id,
             timestamp_seconds=request.timestamp_seconds,
             region_id=request.region_id,
+        )
+        return _mutation_response(bundle, invalidated)
+    except Exception as exc:
+        _raise_api_error(exc)
+
+
+@router.post(
+    "/search-sessions/{session_id}/commands/fix-frames",
+    response_model=MutationResponse,
+)
+def fix_frames(session_id: str, request: BatchFixFrameRequest):
+    """Batch form of commands/fix-frame - fix many (event, video, frame)
+    pins in one call, one expected_revision, one resulting revision bump."""
+    try:
+        bundle, invalidated = adaptive_service.fix_frames(
+            session_id,
+            expected_revision=request.expected_revision,
+            fixes=request.fixes,
         )
         return _mutation_response(bundle, invalidated)
     except Exception as exc:

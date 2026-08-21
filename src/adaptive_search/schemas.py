@@ -379,6 +379,11 @@ class SparseCandidate(StrictModel):
     raw_relevance_score: RawScore
     normalized_relevance_score: UnitScore | None = None
     query_variant: NonEmptyStr
+    # A video-level property (same for every candidate/region of a given
+    # video_id), carried per-candidate since that's the only place upstream
+    # metadata enters the pipeline - see video_priorities.py, which looks
+    # this up per winning video_id from the session's candidates.
+    watch_url: NonEmptyStr | None = None
 
 
 class TemporalRegion(StrictModel):
@@ -554,6 +559,19 @@ class EventConstraint(StrictModel):
         return self
 
 
+class FixFrameEntry(StrictModel):
+    """One item of a batch commands/fix-frames call - the same per-pin data
+    a single commands/fix-frame call takes, plus event_id (implicit there
+    from the URL/single-item payload, needed here since a batch spans
+    multiple events)."""
+
+    event_id: NonEmptyStr
+    video_id: NonEmptyStr
+    frame_id: NonNegativeInt
+    timestamp_seconds: Seconds
+    region_id: NonEmptyStr | None = None
+
+
 class AdjacentGapConstraint(StrictModel):
     before_event_id: NonEmptyStr
     after_event_id: NonEmptyStr
@@ -660,5 +678,16 @@ class VideoPriority(StrictModel):
     # is inspectable instead of opaque.
     raw_score: RawScore
     priority_score: UnitScore
+    # From the winning tuple's candidates (SparseCandidate.watch_url) -
+    # None when the session's candidates never carried it (e.g. an upstream
+    # response that didn't include watch_url, or a synthetic fixed region
+    # with no backing candidate).
+    watch_url: NonEmptyStr | None = None
+    # One entry per session event, same order as the session's events - the
+    # winning tuple's frame_id for that event, "?" where the event is
+    # uncovered or its frame can't be resolved. A commands/fix-frame pin for
+    # (event, this video) always wins here, live - not a snapshot from when
+    # the tuple was ranked, so this list changes on the next call after a fix.
+    matched_frame_ids: tuple[NonEmptyStr, ...] = ()
 
 

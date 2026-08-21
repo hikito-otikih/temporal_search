@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from .algorithms import atomic_regions
 from .exceptions import AdaptiveInputError, RevisionConflictError
-from .schemas import EventDefinition, SearchConstraints
+from .schemas import EventConstraint, EventDefinition, EventProposal, SearchConstraints
 from .session import SearchRun, SessionBundle, utc_now
 
 
@@ -25,6 +25,77 @@ def _event_index(bundle: SessionBundle, event_id: str) -> int:
         if event.event_id == event_id:
             return index
     raise AdaptiveInputError(f"unknown event_id: {event_id}")
+
+
+def _apply_fix_frame(
+    bundle: SessionBundle,
+    *,
+    session_id: str,
+    event_id: str,
+    video_id: str,
+    frame_id: int,
+    timestamp_seconds: float,
+    region_id: str | None,
+) -> None:
+    """Pins one event+video's exact frame - the single-item core of both
+    AdaptiveSearchService.fix_frame() and fix_frames() (batch), factored out
+    so a batch call applies each item with identical semantics to N separate
+    single calls, just inside one mutation (one revision bump, one
+    expected_revision check) instead of N."""
+
+    _event_index(bundle, event_id)
+    _clear_fixed_proposal_status(bundle, event_id)
+    matching = next(
+        (
+            proposal
+            for proposal in bundle.artifacts.proposals
+            if proposal.event_id == event_id
+            and proposal.video_id == video_id
+            and proposal.frame_id == frame_id
+        ),
+        None,
+    )
+    if matching is None:
+        matching = EventProposal(
+            id=f"user:{event_id}:{video_id}:{frame_id}",
+            session_id=session_id,
+            event_id=event_id,
+            video_id=video_id,
+            region_id=region_id or f"user:{event_id}:{video_id}",
+            timestamp_seconds=timestamp_seconds,
+            frame_id=frame_id,
+            raw_semantic_score=1.0,
+            normalized_semantic_score=1.0,
+            raw_boundary_score=1.0,
+            normalized_boundary_score=1.0,
+            normalized_motion_score=0.5,
+            pre_consistency_score=1.0,
+            post_persistence_score=1.0,
+            final_event_score=1.0,
+            source="user",
+            user_status="fixed",
+        )
+        bundle.artifacts.proposals.append(matching)
+    else:
+        replacement = matching.model_copy(update={"user_status": "fixed"})
+        bundle.artifacts.proposals = [
+            replacement if item.id == matching.id else item
+            for item in bundle.artifacts.proposals
+        ]
+    constraints_payload = bundle.session.constraints.model_dump()
+    event_constraints = dict(constraints_payload["event_constraints"])
+    current = event_constraints.get(event_id, EventConstraint().model_dump())
+    current.update(
+        {
+            "fixed_video_id": video_id,
+            "fixed_region_id": region_id or matching.region_id,
+            "fixed_frame_id": frame_id,
+            "fixed_timestamp_seconds": timestamp_seconds,
+        }
+    )
+    event_constraints[event_id] = current
+    constraints_payload["event_constraints"] = event_constraints
+    bundle.session.constraints = SearchConstraints.model_validate(constraints_payload)
 
 
 def _require_revision(bundle: SessionBundle, expected_revision: int) -> None:

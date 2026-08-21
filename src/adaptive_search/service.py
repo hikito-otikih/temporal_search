@@ -14,9 +14,8 @@ from .invalidation import (
     invalidated_for_parameters,
 )
 from .schemas import (
-    EventConstraint,
     EventDefinition,
-    EventProposal,
+    FixFrameEntry,
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
@@ -24,6 +23,7 @@ from .schemas import (
 from .providers import FrameProvider, UnavailableFrameProvider
 from .retrieval import fuse_candidates_rrf
 from .service_helpers import (
+    _apply_fix_frame,
     _clear_fixed_proposal_status,
     _complete_run,
     _deep_merge,
@@ -339,61 +339,49 @@ class AdaptiveSearchService:
         invalidated = invalidated_for_constraint("fix_frame")
 
         def mutate(bundle: SessionBundle) -> None:
-            _event_index(bundle, event_id)
-            _clear_fixed_proposal_status(bundle, event_id)
-            matching = next(
-                (
-                    proposal
-                    for proposal in bundle.artifacts.proposals
-                    if proposal.event_id == event_id
-                    and proposal.video_id == video_id
-                    and proposal.frame_id == frame_id
-                ),
-                None,
+            _apply_fix_frame(
+                bundle,
+                session_id=session_id,
+                event_id=event_id,
+                video_id=video_id,
+                frame_id=frame_id,
+                timestamp_seconds=timestamp_seconds,
+                region_id=region_id,
             )
-            if matching is None:
-                matching = EventProposal(
-                    id=f"user:{event_id}:{video_id}:{frame_id}",
+            bundle.session.last_invalidated_stages = invalidated
+
+        return (
+            self.repository.mutate(session_id, expected_revision, mutate),
+            invalidated,
+        )
+
+    def fix_frames(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        fixes: list[FixFrameEntry],
+    ) -> tuple[SessionBundle, list[str]]:
+        """Batch form of fix_frame() - applies every item inside one mutation,
+        so N pins cost one expected_revision check and one revision bump
+        instead of N round trips each racing the next against a concurrent
+        caller. Items are applied in order; a later item pinning the same
+        event_id as an earlier one simply overrides it, matching what N
+        sequential fix_frame() calls would do."""
+
+        invalidated = invalidated_for_constraint("fix_frame")
+
+        def mutate(bundle: SessionBundle) -> None:
+            for fix in fixes:
+                _apply_fix_frame(
+                    bundle,
                     session_id=session_id,
-                    event_id=event_id,
-                    video_id=video_id,
-                    region_id=region_id or f"user:{event_id}:{video_id}",
-                    timestamp_seconds=timestamp_seconds,
-                    frame_id=frame_id,
-                    raw_semantic_score=1.0,
-                    normalized_semantic_score=1.0,
-                    raw_boundary_score=1.0,
-                    normalized_boundary_score=1.0,
-                    normalized_motion_score=0.5,
-                    pre_consistency_score=1.0,
-                    post_persistence_score=1.0,
-                    final_event_score=1.0,
-                    source="user",
-                    user_status="fixed",
+                    event_id=fix.event_id,
+                    video_id=fix.video_id,
+                    frame_id=fix.frame_id,
+                    timestamp_seconds=fix.timestamp_seconds,
+                    region_id=fix.region_id,
                 )
-                bundle.artifacts.proposals.append(matching)
-            else:
-                replacement = matching.model_copy(update={"user_status": "fixed"})
-                bundle.artifacts.proposals = [
-                    replacement if item.id == matching.id else item
-                    for item in bundle.artifacts.proposals
-                ]
-            constraints_payload = bundle.session.constraints.model_dump()
-            event_constraints = dict(constraints_payload["event_constraints"])
-            current = event_constraints.get(event_id, EventConstraint().model_dump())
-            current.update(
-                {
-                    "fixed_video_id": video_id,
-                    "fixed_region_id": region_id or matching.region_id,
-                    "fixed_frame_id": frame_id,
-                    "fixed_timestamp_seconds": timestamp_seconds,
-                }
-            )
-            event_constraints[event_id] = current
-            constraints_payload["event_constraints"] = event_constraints
-            bundle.session.constraints = SearchConstraints.model_validate(
-                constraints_payload
-            )
             bundle.session.last_invalidated_stages = invalidated
 
         return (

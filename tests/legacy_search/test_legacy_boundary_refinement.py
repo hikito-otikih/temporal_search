@@ -73,7 +73,7 @@ class FakeEmbedder:
 
 def _query_response(query, video_name):
     return QueryResponse(
-        query=query,
+        query=[query],
         results=[
             Candidate(
                 frame_index=10,

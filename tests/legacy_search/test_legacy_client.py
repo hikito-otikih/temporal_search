@@ -36,7 +36,7 @@ class _ResetOnReadResponse:
 
 class SearchQueriesTimeoutTests(unittest.TestCase):
     def test_urlopen_is_called_with_a_bounded_timeout(self) -> None:
-        response_body = json.dumps({"query": "cat", "results": []}).encode("utf-8")
+        response_body = json.dumps({"query": ["cat"], "results": []}).encode("utf-8")
 
         with patch("legacy_search.client.request.urlopen") as mock_urlopen:
             mock_urlopen.return_value = _FakeResponse(response_body)
@@ -65,7 +65,7 @@ class SearchQueriesUpstreamErrorClassificationTests(unittest.TestCase):
 
     def test_valid_json_with_wrong_schema_is_reported_as_upstream_error(self) -> None:
         # Valid JSON, but missing QueryResponse's required "results" field.
-        response_body = json.dumps({"query": "cat"}).encode("utf-8")
+        response_body = json.dumps({"query": ["cat"]}).encode("utf-8")
 
         with patch("legacy_search.client.request.urlopen") as mock_urlopen:
             mock_urlopen.return_value = _FakeResponse(response_body)
