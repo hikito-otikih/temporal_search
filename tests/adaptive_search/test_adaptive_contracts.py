@@ -22,7 +22,6 @@ class AdaptiveContractTests(unittest.TestCase):
                 "events": [
                     {
                         "event_id": "e1",
-                        "original_query": "person enters",
                         "anchor_query": "a person entering",
                     }
                 ],

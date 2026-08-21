@@ -21,12 +21,10 @@ class AdaptiveJsonContractTests(unittest.TestCase):
                 "events": [
                     {
                         "event_id": "e1",
-                        "original_query": "first",
                         "anchor_query": "first",
                     },
                     {
                         "event_id": "e2",
-                        "original_query": "second",
                         "anchor_query": "second",
                     },
                 ],
@@ -39,19 +37,14 @@ class AdaptiveJsonContractTests(unittest.TestCase):
                         }
                     ],
                 },
-                "hyperparameters": {
-                    "boundary": {
-                        "window_options_seconds": [0.5, 1.0],
-                    }
-                },
             },
         )
         self.assertEqual(response.status_code, 201, response.text)
         session = response.json()["session"]
         self.assertEqual(session["constraints"]["allowed_video_ids"], ["video"])
         self.assertEqual(
-            session["hyperparameters"]["boundary"]["window_options_seconds"],
-            [0.5, 1.0],
+            session["constraints"]["adjacent_gap_constraints"][0]["before_event_id"],
+            "e1",
         )
 
 

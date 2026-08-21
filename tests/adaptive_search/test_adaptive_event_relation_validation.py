@@ -21,7 +21,6 @@ from main import app
 def _event(event_id, *, temporal_relation="unknown", reference_event_id=None):
     return EventDefinition(
         event_id=event_id,
-        original_query=f"query for {event_id}",
         anchor_query=f"query for {event_id}",
         temporal_relation=temporal_relation,
         reference_event_id=reference_event_id,
@@ -79,14 +78,12 @@ class EventRelationGraphValidationHttpTests(unittest.TestCase):
                 "events": [
                     {
                         "event_id": "e1",
-                        "original_query": "cut onion",
                         "anchor_query": "cut onion",
                         "temporal_relation": "before",
                         "reference_event_id": "e2",
                     },
                     {
                         "event_id": "e2",
-                        "original_query": "fry onion",
                         "anchor_query": "fry onion",
                         "temporal_relation": "before",
                         "reference_event_id": "e1",

@@ -1,68 +1,15 @@
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from adaptive_search.dependencies import adaptive_service
-from adaptive_search.rewrite_bridge import build_session_plan
-from adaptive_search.client import UpstreamSearchClient, UpstreamSearchError
+from adaptive_search.client import UpstreamSearchClient
 from main import app
-from rewrite import (
-    ConfigurationError,
-    OllamaRateLimitError,
-    OllamaServiceError,
-    OllamaTimeoutError,
-)
 
 
-def rewritten_event(index, query, boundary="start"):
-    return {
-        "event_id": index,
-        "original_query": query,
-        "target_moment_vi": f"Khoảnh khắc con lân màu vàng đen trắng ở sự kiện {index}.",
-        "anchor_query": f"Con lân màu vàng đen trắng trong màn múa lân ở sự kiện {index}.",
-        "retrieval_queries_vi": [
-            f"Con lân màu vàng đen trắng thực hiện hành động ở sự kiện {index}.",
-            f"Khoảnh khắc lân màu vàng đen trắng ở sự kiện {index}.",
-        ],
-        "retrieval_queries_en": [
-            f"The yellow, black, and white lion performs in event {index}.",
-            f"The lion-dance moment in event {index}.",
-        ],
-        "retrieval_queries_en_language": ["en", "en"],
-        "subject": "con lân",
-        "action": "thực hiện hành động",
-        "visible_state": "hành động của con lân có thể nhìn thấy",
-        "pre_state": f"Ngay trước sự kiện {index}, con lân chưa thực hiện hành động.",
-        "post_state": f"Ngay sau sự kiện {index}, con lân vừa hoàn thành hành động.",
-        "boundary": boundary,
-        "temporal_relation": {
-            "relation": "sequence_start" if index == 0 else "independent",
-            "reference_event_id": None,
-        },
-        "required_entities": ["con lân"],
-        "soft_context": ["màn múa lân"],
-        "excluded_context": [],
-        "inferred_information": ["Từ common_query: lân màu vàng đen trắng."],
-        "ambiguities": [],
-    }
-
-
-def analysis(queries):
-    from rewrite.schemas import RewriteResponse
-
-    return RewriteResponse.model_validate(
-        {
-            "video_context": {
-                "scene": "múa lân",
-                "main_entities": ["một con lân màu vàng, đen và trắng"],
-            },
-            "events": [
-                rewritten_event(index, query)
-                for index, query in enumerate(queries)
-            ],
-        }
-    )
+def event(event_id, anchor_query):
+    return {"event_id": event_id, "anchor_query": anchor_query}
 
 
 def fake_upstream_client():
@@ -96,136 +43,17 @@ class AdaptivePipelineTests(unittest.TestCase):
     def tearDown(self):
         self.client.close()
 
-    def create_session_from_queries(self, queries):
-        plan = build_session_plan(
-            analysis(queries), common_query="Video múa lân."
+    def create_session(self, events):
+        response = self.client.post(
+            "/v1/search-sessions",
+            json={"events": events},
         )
-        rewrite_mock = AsyncMock(return_value=plan)
-        with patch(
-            "adaptive_search.router.rewrite_queries_and_build_plan", rewrite_mock
-        ):
-            response = self.client.post(
-                "/v1/search-sessions/from-queries",
-                json={
-                    "common_query": "Video múa lân.",
-                    "query": queries,
-                },
-            )
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()["session"]["id"]
 
-    def test_from_queries_creates_session_with_events_and_variants(self):
-        queries = [
-            "Khoảnh khắc đầu tiên con lân xoay vòng.",
-            "Khoảnh khắc bốn chân chạm đất đầu tiên.",
-        ]
-        session_id = self.create_session_from_queries(queries)
-
-        response = self.client.get(f"/v1/search-sessions/{session_id}")
-        self.assertEqual(response.status_code, 200, response.text)
-        session = response.json()["session"]
-
-        self.assertEqual(
-            [event["event_id"] for event in session["events"]],
-            ["evt0", "evt1"],
-        )
-        self.assertEqual(session["events"][0]["boundary_type"], "onset")
-        self.assertEqual(
-            len(session["retrieval_variants"]["evt0"]), 4
-        )
-        # original_query (the caller's own unmodified text) is included as
-        # a variant, replacing one of the two retrieval_queries_vi
-        # paraphrases - see build_session_plan's own comment for why.
-        self.assertEqual(
-            session["retrieval_variants"]["evt1"][0],
-            queries[1],
-        )
-    def test_from_rewrite_creates_the_same_session_with_zero_llm_calls(self):
-        # No rewrite_queries_and_build_plan patch/mock anywhere in this test -
-        # if /from-rewrite tried to call the LLM, there would be nothing to
-        # answer it and this would error out. Passing cleanly is itself the
-        # proof this endpoint never calls Ollama: it only maps an
-        # already-computed analysis (e.g. one the UI already fetched via
-        # POST /rewrite to preview) into a session, exactly matching what
-        # /from-queries would have produced for the same analysis.
-        queries = [
-            "Khoảnh khắc đầu tiên con lân xoay vòng.",
-            "Khoảnh khắc bốn chân chạm đất đầu tiên.",
-        ]
-        response = self.client.post(
-            "/v1/search-sessions/from-rewrite",
-            json={
-                "analysis": analysis(queries).model_dump(mode="json"),
-                "common_query": "Video múa lân.",
-            },
-        )
-        self.assertEqual(response.status_code, 201, response.text)
-        session_id = response.json()["session"]["id"]
-
-        response = self.client.get(f"/v1/search-sessions/{session_id}")
-        self.assertEqual(response.status_code, 200, response.text)
-        session = response.json()["session"]
-
-        self.assertEqual(
-            [event["event_id"] for event in session["events"]],
-            ["evt0", "evt1"],
-        )
-        self.assertEqual(session["events"][0]["boundary_type"], "onset")
-        self.assertEqual(len(session["retrieval_variants"]["evt0"]), 4)
-        # original_query (the caller's own unmodified text) is included as
-        # a variant, replacing one of the two retrieval_queries_vi
-        # paraphrases - see build_session_plan's own comment for why.
-        self.assertEqual(
-            session["retrieval_variants"]["evt1"][0],
-            queries[1],
-        )
-
-    def test_from_rewrite_rejects_unknown_request_fields(self):
-        queries = ["Một sự kiện."]
-        response = self.client.post(
-            "/v1/search-sessions/from-rewrite",
-            json={
-                "analysis": analysis(queries).model_dump(mode="json"),
-                "modelname": "gpt-oss:20b",
-            },
-        )
-        self.assertEqual(response.status_code, 422, response.text)
-
-    def test_from_queries_rejects_unknown_request_fields(self):
-        response = self.client.post(
-            "/v1/search-sessions/from-queries",
-            json={
-                "query": ["Một sự kiện."],
-                "modelname": "gpt-oss:20b",
-            },
-        )
-        self.assertEqual(response.status_code, 422)
-
-    def test_from_queries_maps_ollama_errors(self):
-        payload = {"query": ["Một sự kiện."]}
-        cases = (
-            (ConfigurationError("missing"), 500, "ollama_not_configured"),
-            (OllamaTimeoutError("slow"), 504, "ollama_timeout"),
-            (OllamaRateLimitError("limited"), 503, "ollama_rate_limited"),
-            (OllamaServiceError("down"), 502, "ollama_service_error"),
-        )
-        for error, expected_status, expected_code in cases:
-            with self.subTest(error=type(error).__name__):
-                with patch(
-                    "adaptive_search.router.rewrite_queries_and_build_plan",
-                    AsyncMock(side_effect=error),
-                ):
-                    response = self.client.post(
-                        "/v1/search-sessions/from-queries", json=payload
-                    )
-                self.assertEqual(response.status_code, expected_status)
-                self.assertEqual(
-                    response.json()["detail"]["code"], expected_code
-                )
-
     def test_retrieve_ingests_upstream_candidates_into_regions(self):
-        session_id = self.create_session_from_queries(
-            ["Khoảnh khắc đầu tiên con lân xoay vòng."]
+        session_id = self.create_session(
+            [event("e1", "Khoảnh khắc đầu tiên con lân xoay vòng.")]
         )
 
         with patch(
@@ -246,27 +74,27 @@ class AdaptivePipelineTests(unittest.TestCase):
             f"/v1/search-sessions/{session_id}/regions"
         ).json()["items"]
         self.assertTrue(
-            all(item["event_id"] == "evt0" for item in regions)
+            all(item["event_id"] == "e1" for item in regions)
         )
 
-    def test_retrieve_falls_back_to_anchor_query_without_stored_variants(self):
-        response = self.client.post(
-            "/v1/search-sessions",
-            json={
-                "events": [
-                    {
-                        "event_id": "e1",
-                        "original_query": "Khoảnh khắc đầu tiên con lân xoay vòng.",
-                        "anchor_query": "Con lân bắt đầu xoay vòng trên cột.",
-                    }
-                ]
-            },
-        )
-        self.assertEqual(response.status_code, 201, response.text)
-        session_id = response.json()["session"]["id"]
+    def test_retrieve_uses_anchor_query_directly(self):
+        # No rewrite/variant indirection exists any more - the event's own
+        # anchor_query is exactly the text sent upstream.
+        anchor_query = "Con lân bắt đầu xoay vòng trên cột."
+        sent_queries = []
+
+        def spy_transport(url, payload, timeout):
+            sent_queries.append(payload["query"])
+            return {
+                "query": [payload["query"]],
+                "results": [],
+            }
+
+        session_id = self.create_session([event("e1", anchor_query)])
 
         with patch(
-            "adaptive_search.router.upstream_search_client", fake_upstream_client()
+            "adaptive_search.router.upstream_search_client",
+            UpstreamSearchClient(transport=spy_transport),
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
@@ -274,13 +102,11 @@ class AdaptivePipelineTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertGreater(
-            response.json()["artifact_counts"]["candidates"], 0
-        )
+        self.assertEqual(sent_queries, [anchor_query])
 
     def test_retrieve_restricts_to_requested_events(self):
-        session_id = self.create_session_from_queries(
-            ["Sự kiện thứ nhất.", "Sự kiện thứ hai."]
+        session_id = self.create_session(
+            [event("e1", "Sự kiện thứ nhất."), event("e2", "Sự kiện thứ hai.")]
         )
 
         with patch(
@@ -288,7 +114,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         ):
             response = self.client.post(
                 f"/v1/search-sessions/{session_id}/commands/retrieve",
-                json={"top_k": 5, "event_ids": ["evt0"]},
+                json={"top_k": 5, "event_ids": ["e1"]},
             )
 
         self.assertEqual(response.status_code, 200, response.text)
@@ -297,7 +123,7 @@ class AdaptivePipelineTests(unittest.TestCase):
         self.assertLess(candidates, 4)
 
     def test_retrieve_rejects_unknown_event(self):
-        session_id = self.create_session_from_queries(["Sự kiện một."])
+        session_id = self.create_session([event("e1", "Sự kiện một.")])
         with patch(
             "adaptive_search.router.upstream_search_client", fake_upstream_client()
         ):
@@ -312,7 +138,7 @@ class AdaptivePipelineTests(unittest.TestCase):
             return {"query": ["different"], "results": []}
 
         client = UpstreamSearchClient(transport=broken_transport)
-        session_id = self.create_session_from_queries(["Sự kiện một."])
+        session_id = self.create_session([event("e1", "Sự kiện một.")])
 
         with patch(
             "adaptive_search.router.upstream_search_client", client

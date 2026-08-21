@@ -4,12 +4,10 @@ from fastapi import FastAPI
 
 from adaptive_search.router import router as adaptive_router
 from legacy_search.router import router as legacy_router
-from rewrite.router import router as rewrite_router
 
 app = FastAPI(title="Temporal Search API")
 
 app.include_router(adaptive_router)
-app.include_router(rewrite_router)
 app.include_router(legacy_router)
 
 

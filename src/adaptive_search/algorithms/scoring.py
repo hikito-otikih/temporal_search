@@ -1,24 +1,18 @@
-"""Pure scoring/calibration math: robust normalization, pairwise softmax,
-frame-score calibration, and the population-relative candidate/region score
-maps everything else in this package builds on. No domain-object assembly
-(regions, proposals, rankings) lives here."""
+"""Pure scoring/calibration math: robust normalization and the
+population-relative candidate/region score maps everything else in this
+package builds on. No domain-object assembly (regions, rankings) lives
+here."""
 
 from __future__ import annotations
 
 from collections import defaultdict
-from hashlib import sha256
 from math import exp, isclose
-from statistics import fmean, median
+from statistics import median
 from typing import Sequence
 
-from ..schemas import BoundaryHyperparameters, FrameScoreSample, SparseCandidate, TemporalRegion
+from ..schemas import SparseCandidate, TemporalRegion
 
 _EPSILON = 1e-12
-
-
-def _stable_id(prefix: str, *parts: object) -> str:
-    payload = "\x1f".join(str(part) for part in parts).encode("utf-8")
-    return f"{prefix}_{sha256(payload).hexdigest()[:20]}"
 
 
 def _sigmoid(value: float) -> float:
@@ -66,81 +60,6 @@ def robust_sigmoid(
     return normalized
 
 
-def pairwise_softmax(
-    first_score: float,
-    second_score: float,
-    *,
-    temperature: float = 1.0,
-) -> tuple[float, float]:
-    """Stable two-way softmax used to make pre/post scores comparable."""
-
-    if temperature <= 0.0:
-        raise ValueError("temperature must be positive")
-    scaled_first = first_score / temperature
-    scaled_second = second_score / temperature
-    maximum = max(scaled_first, scaled_second)
-    first_exp = exp(scaled_first - maximum)
-    second_exp = exp(scaled_second - maximum)
-    denominator = first_exp + second_exp
-    return first_exp / denominator, second_exp / denominator
-
-
-def calibrate_frame_scores(
-    samples: Sequence[FrameScoreSample],
-    parameters: BoundaryHyperparameters | None = None,
-) -> list[FrameScoreSample]:
-    """Calibrate raw scores independently inside each event/video/region.
-
-    Pre and post states are normalized as a pair at each frame.  Anchor and
-    motion signals use robust sigmoid calibration across the local region.
-    Raw fields are copied unchanged into the returned samples. Used by
-    `generate_boundary_proposals` regardless of where the raw samples came
-    from - session-level ingestion (removed, see `service.py`'s docstring
-    note) or the live per-request boundary-refinement sweep
-    (`boundary_refinement.py`, which constructs raw `FrameScoreSample`s and
-    always relies on this calibration step, never skips it).
-    """
-
-    parameters = parameters or BoundaryHyperparameters()
-    calibrated = list(samples)
-    grouped_indices: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
-    for index, sample in enumerate(samples):
-        grouped_indices[
-            (
-                sample.session_id,
-                sample.event_id,
-                sample.video_id,
-                sample.region_id,
-            )
-        ].append(index)
-
-    for indices in grouped_indices.values():
-        anchor_values = [samples[index].raw_anchor_score for index in indices]
-        motion_values = [samples[index].raw_motion_score for index in indices]
-        normalized_anchors = robust_sigmoid(
-            anchor_values, clip_z=parameters.anchor_clip_z
-        )
-        normalized_motion = robust_sigmoid(
-            motion_values, clip_z=parameters.anchor_clip_z
-        )
-        for local_index, sample_index in enumerate(indices):
-            sample = samples[sample_index]
-            pre_score, post_score = pairwise_softmax(
-                sample.raw_pre_score,
-                sample.raw_post_score,
-                temperature=parameters.pairwise_temperature,
-            )
-            calibrated[sample_index] = sample.model_copy(
-                update={
-                    "normalized_anchor_score": normalized_anchors[local_index],
-                    "normalized_pre_score": pre_score,
-                    "normalized_post_score": post_score,
-                    "normalized_motion_score": normalized_motion[local_index],
-                }
-            )
-    return calibrated
-
-
 def _candidate_normalized_scores(
     candidates: Sequence[SparseCandidate],
 ) -> dict[str, float]:
@@ -168,13 +87,6 @@ def _candidate_normalized_scores_by_event(
     for group in grouped.values():
         normalized.update(_candidate_normalized_scores(group))
     return normalized
-
-
-def _mean(samples: Sequence[FrameScoreSample], attribute: str) -> float:
-    values = [getattr(sample, attribute) for sample in samples]
-    if any(value is None for value in values):
-        raise ValueError("frame scores must be calibrated before proposal generation")
-    return fmean(float(value) for value in values)
 
 
 def _region_score_map(regions: Sequence[TemporalRegion]) -> dict[str, float]:

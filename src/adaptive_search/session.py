@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .exceptions import RevisionConflictError, SessionNotFoundError
 from .schemas import (
     EventDefinition,
-    EventProposal,
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
@@ -43,7 +42,6 @@ class SearchSession(SessionModel):
     searcher_type: SearcherType = "adaptive_temporal"
     common_query: str | None = Field(default=None, max_length=8000)
     events: list[EventDefinition] = Field(min_length=1, max_length=32)
-    retrieval_variants: dict[str, list[str]] = Field(default_factory=dict)
     hyperparameters: SearchHyperparameters = Field(
         default_factory=SearchHyperparameters
     )
@@ -65,7 +63,6 @@ class ArtifactState(SessionModel):
     revision: int = Field(default=0, ge=0)
     candidates: list[SparseCandidate] = Field(default_factory=list)
     regions: list[TemporalRegion] = Field(default_factory=list)
-    proposals: list[EventProposal] = Field(default_factory=list)
 
 
 class SearchRun(SessionModel):
@@ -111,7 +108,6 @@ class InMemorySessionRepository:
         searcher_type: SearcherType,
         hyperparameters: SearchHyperparameters,
         constraints: SearchConstraints,
-        retrieval_variants: dict[str, list[str]] | None = None,
     ) -> SessionBundle:
         session_id = str(uuid4())
         session = SearchSession(
@@ -119,7 +115,6 @@ class InMemorySessionRepository:
             events=events,
             common_query=common_query,
             searcher_type=searcher_type,
-            retrieval_variants=dict(retrieval_variants or {}),
             hyperparameters=hyperparameters,
             constraints=constraints,
         )

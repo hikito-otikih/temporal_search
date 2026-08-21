@@ -39,8 +39,6 @@ RefinementStatus = Literal[
     "failed",
 ]
 RegionUserStatus = Literal["active", "fixed", "rejected"]
-ProposalSource = Literal["sparse", "medium", "dense", "user"]
-ProposalUserStatus = Literal["active", "fixed", "confirmed", "rejected"]
 TemporalRelationType = Literal[
     "sequence_start",
     "after",
@@ -63,87 +61,16 @@ class StrictModel(BaseModel):
     )
 
 
-class ModelRuntimeSpec(StrictModel):
-    """Every value that can change model output or an embedding cache key."""
-
-    model_id: NonEmptyStr
-    revision: NonEmptyStr = "main"
-    dimension: PositiveInt | None = None
-    preprocess: NonEmptyStr
-    instruction: str = ""
-
-
-def _runtime_embedding_model() -> ModelRuntimeSpec:
-    return ModelRuntimeSpec(
-        model_id="google/siglip2-base-patch16-224",
-        revision="main",
-        dimension=768,
-        preprocess="siglip2-auto-processor-v1",
-        instruction="",
-    )
-
-
-def _quality_embedding_model() -> ModelRuntimeSpec:
-    return ModelRuntimeSpec(
-        model_id="Qwen/Qwen3-VL-Embedding-2B",
-        revision="main",
-        dimension=1024,
-        preprocess="qwen3-vl-embedding:v1",
-        instruction=(
-            "Retrieve video frames that visually depict the described event."
-        ),
-    )
-
-
-def _quality_reranker_model() -> ModelRuntimeSpec:
-    return ModelRuntimeSpec(
-        model_id="Qwen/Qwen3-VL-Reranker-2B",
-        revision="main",
-        dimension=1,
-        preprocess="qwen3-vl-reranker:v1",
-        instruction=(
-            "Judge whether the ordered video frames depict the described "
-            "events in the required chronological order."
-        ),
-    )
-
-
-class RetrievalHyperparameters(StrictModel):
-    # top_n_per_variant/top_n_fused: winner config from the youcook2 benchmark's
-    # hyperparameter sweep (research_tools/benchmarks/youcook2/hyperparameter_sweep_results.md) -
-    # wide retrieval measurably improved adaptive_coarse recall over the previous
-    # narrower defaults with no downside found.
-    top_n_per_variant: PositiveInt = 500
-    top_n_fused: PositiveInt = 1000
-    rrf_k: PositiveInt = 60
-    query_variants_per_event: PositiveInt = 4
-
-
-class RefinementHyperparameters(StrictModel):
-    """Video-priority blend weights and fully fingerprintable inference
-    configuration. Dense/medium sampling-interval fields were removed with
-    `commands/refine` (the dense orchestrator that was their only consumer).
-    The refinement-frontier budget fields (max_initial_videos,
-    max_regions_per_event_per_video, max_total_regions,
+class VideoPriorityHyperparameters(StrictModel):
+    """Video-priority blend weights. Dense/medium sampling-interval fields
+    were removed with `commands/refine` (the dense orchestrator that was
+    their only consumer). The refinement-frontier budget fields
+    (max_initial_videos, max_regions_per_event_per_video, max_total_regions,
     exploration_region_ratio) were removed alongside `/artifacts/frame-scores`
     and `select_refinement_frontier` - all three existed only to support an
     external client precomputing frame-level refinement scores and
     submitting them back into a session, a workflow this product does not
-    support (live boundary refinement via `apply_boundary_refinement` is a
-    separate, unaffected mechanism - see `boundary_refinement.py`). See
-    `docs/ADAPTIVE_PIPELINE_MIGRATION.md`."""
-
-    embedding_model: ModelRuntimeSpec = Field(
-        default_factory=_runtime_embedding_model
-    )
-    quality_embedding_model: ModelRuntimeSpec | None = Field(
-        default_factory=_quality_embedding_model
-    )
-    reranker_model: ModelRuntimeSpec | None = Field(
-        default_factory=_quality_reranker_model
-    )
-    quality_profile_enabled: bool = False
-    use_reranker: bool = False
+    support. See `docs/ADAPTIVE_PIPELINE_MIGRATION.md`."""
 
     # Winner config from the same hyperparameter sweep: mean-only ranking beat
     # every blend that included coverage or min once retrieval is wide (see
@@ -163,16 +90,7 @@ class RefinementHyperparameters(StrictModel):
     distinctness_norm_seconds: PositiveFloat = 3.0
 
     @model_validator(mode="after")
-    def validate_refinement_configuration(self) -> "RefinementHyperparameters":
-        if self.quality_profile_enabled and self.quality_embedding_model is None:
-            raise ValueError(
-                "quality_embedding_model is required when quality_profile_enabled"
-            )
-        if self.use_reranker:
-            raise ValueError(
-                "use_reranker=true is not supported until the ordered-frame "
-                "reranker runtime is implemented"
-            )
+    def validate_video_priority_configuration(self) -> "VideoPriorityHyperparameters":
         video_weight = (
             self.video_coverage_weight
             + self.video_mean_weight
@@ -181,60 +99,6 @@ class RefinementHyperparameters(StrictModel):
         )
         if video_weight <= 0.0:
             raise ValueError("at least one video-priority weight must be positive")
-        return self
-
-
-class BoundaryHyperparameters(StrictModel):
-    window_options_seconds: tuple[PositiveFloat, ...] = (0.5, 1.0, 2.0, 3.0)
-    min_samples_per_side: PositiveInt = 2
-    pairwise_temperature: PositiveFloat = 1.0
-    anchor_clip_z: PositiveFloat = 8.0
-
-    post_contrast_weight: NonNegativeFloat = 0.5
-    pre_contrast_weight: NonNegativeFloat = 0.5
-    motion_contrast_weight: NonNegativeFloat = 0.1
-    window_length_regularization: NonNegativeFloat = 0.01
-    window_asymmetry_regularization: NonNegativeFloat = 0.01
-
-    semantic_weight: NonNegativeFloat = 0.4
-    boundary_weight: NonNegativeFloat = 0.3
-    pre_weight: NonNegativeFloat = 0.1
-    post_weight: NonNegativeFloat = 0.2
-
-    nms_radius_seconds: Seconds = 0.5
-    max_proposals_per_region: PositiveInt = 5
-
-    @field_validator("window_options_seconds", mode="before")
-    @classmethod
-    def accept_json_window_array(cls, value):
-        if isinstance(value, list):
-            return tuple(value)
-        return value
-
-    @model_validator(mode="after")
-    def validate_boundary_configuration(self) -> "BoundaryHyperparameters":
-        windows = self.window_options_seconds
-        if not windows:
-            raise ValueError("window_options_seconds must not be empty")
-        if len(set(windows)) != len(windows):
-            raise ValueError("window_options_seconds must contain unique values")
-        if tuple(sorted(windows)) != windows:
-            raise ValueError("window_options_seconds must be strictly increasing")
-        contrast_weight = (
-            self.post_contrast_weight
-            + self.pre_contrast_weight
-            + self.motion_contrast_weight
-        )
-        if contrast_weight <= 0.0:
-            raise ValueError("at least one boundary contrast weight must be positive")
-        proposal_weight = (
-            self.semantic_weight
-            + self.boundary_weight
-            + self.pre_weight
-            + self.post_weight
-        )
-        if proposal_weight <= 0.0:
-            raise ValueError("at least one proposal-score weight must be positive")
         return self
 
 
@@ -273,9 +137,16 @@ class TupleRankingHyperparameters(StrictModel):
     if pool sizes grow.
     """
 
-    order_weight: NonNegativeFloat = 0.8
+    order_weight: NonNegativeFloat = 1.2
     """Weight of the (confidence-gated) order-agreement term added to a
-    tuple's mean region score."""
+    tuple's mean region score. Raised from the benchmark-chosen 0.8 (see
+    class docstring) as a deliberate manual change, not a re-validated
+    number: real contest use showed a noticeably-higher-relevance but
+    wrongly-ordered tuple could still occasionally outrank a correctly-
+    ordered one at 0.8. At 1.2 the term's swing (+/-1.2) exceeds the
+    typical region-relevance range ([0,1]), so order-correctness dominates
+    almost every time once confidence_gate passes its threshold. Re-run the
+    YouCook2 benchmark to re-validate before assuming this transfers."""
 
     pooling: Literal["max", "mean"] = "max"
     """How a video's kept tuples combine into one video score: "max" (best
@@ -314,17 +185,36 @@ class TupleRankingHyperparameters(StrictModel):
     """How many top-scoring tuples per video to retain (only matters for
     pooling="mean")."""
 
+    default_adjacent_gap_tau_seconds: Seconds = 25.0
+    """Free zone (in seconds) for the automatic, default-on adjacent-gap
+    penalty applied to every positionally-adjacent event pair a caller
+    hasn't explicitly named in SearchConstraints.adjacent_gap_constraints -
+    that opt-in mechanism (including its own hard min/max bounds) always
+    takes full precedence for any pair it does name; this default only
+    fills in the gaps. Below this many seconds between two consecutive
+    events' timestamps costs nothing. Sanity-checked against three real
+    4-event contest answers (L24_V018, L26_V072, L26_V194); across the
+    corpus's ~25-30fps range their 9 consecutive-event frame gaps convert to
+    ~2.2-25.3s, worst case (25.3s) at the low (25fps) end of that range -
+    this tau comfortably covers it, so a genuinely tight, correctly-clustered
+    answer like those costs ~0 penalty regardless of a given video's exact
+    fps within the known range. Re-check if real gaps start running higher
+    than this on a wider sample; set to a very large value to effectively
+    disable."""
+
+    default_adjacent_gap_lambda: NonNegativeFloat = 0.05
+    """Slope (score lost per second) of the default-on adjacent-gap penalty
+    above default_adjacent_gap_tau_seconds, reusing
+    algorithms.scoring.adjacent_hinge_penalty() exactly as the opt-in
+    SearchConstraints.adjacent_gap_constraints mechanism does. Unlike that
+    mechanism this is soft-only (never rejects a combination) and applies
+    automatically with no per-session configuration needed - rewards tight,
+    coherent event sequences (like a real TRAKE answer) over tuples whose
+    covered events are scattered far apart in the video. Set to 0.0 to
+    fully restore pre-this-field behavior (no default gap penalty at all)."""
+
 
 class SearchHyperparameters(StrictModel):
-    retrieval: RetrievalHyperparameters = Field(
-        default_factory=RetrievalHyperparameters
-    )
-    refinement: RefinementHyperparameters = Field(
-        default_factory=RefinementHyperparameters
-    )
-    boundary: BoundaryHyperparameters = Field(
-        default_factory=BoundaryHyperparameters
-    )
     tuple_ranking: TupleRankingHyperparameters = Field(
         default_factory=TupleRankingHyperparameters
     )
@@ -332,24 +222,10 @@ class SearchHyperparameters(StrictModel):
 
 class EventDefinition(StrictModel):
     event_id: NonEmptyStr
-    original_query: NonEmptyStr
     anchor_query: NonEmptyStr
-    pre_state: NonEmptyStr | None = None
-    post_state: NonEmptyStr | None = None
     boundary_type: BoundaryType = "unknown"
     temporal_relation: TemporalRelationType = "unknown"
     reference_event_id: NonEmptyStr | None = None
-
-    @model_validator(mode="after")
-    def validate_transition_states(self) -> "EventDefinition":
-        transition_profiles = {"onset", "offset", "transition", "plateau_start"}
-        if self.boundary_type in transition_profiles and (
-            self.pre_state is None or self.post_state is None
-        ):
-            raise ValueError(
-                "transition boundary profiles require both pre_state and post_state"
-            )
-        return self
 
     @model_validator(mode="after")
     def validate_temporal_relation_reference(self) -> "EventDefinition":
@@ -378,7 +254,6 @@ class SparseCandidate(StrictModel):
     timestamp_seconds: Seconds
     raw_relevance_score: RawScore
     normalized_relevance_score: UnitScore | None = None
-    query_variant: NonEmptyStr
     # A video-level property (same for every candidate/region of a given
     # video_id), carried per-candidate since that's the only place upstream
     # metadata enters the pipeline - see video_priorities.py, which looks
@@ -408,50 +283,6 @@ class TemporalRegion(StrictModel):
         if len(set(self.candidate_ids)) != len(self.candidate_ids):
             raise ValueError("candidate_ids must be unique")
         return self
-
-
-class FrameScoreSample(StrictModel):
-    session_id: NonEmptyStr
-    event_id: NonEmptyStr
-    video_id: NonEmptyStr
-    region_id: NonEmptyStr
-    frame_id: NonNegativeInt
-    timestamp_seconds: Seconds
-
-    raw_anchor_score: RawScore
-    raw_pre_score: RawScore
-    raw_post_score: RawScore
-    raw_motion_score: RawScore = 0.0
-
-    normalized_anchor_score: UnitScore | None = None
-    normalized_pre_score: UnitScore | None = None
-    normalized_post_score: UnitScore | None = None
-    normalized_motion_score: UnitScore | None = None
-
-
-class EventProposal(StrictModel):
-    id: NonEmptyStr
-    session_id: NonEmptyStr
-    event_id: NonEmptyStr
-    video_id: NonEmptyStr
-    region_id: NonEmptyStr
-    timestamp_seconds: Seconds
-    frame_id: NonNegativeInt
-
-    raw_semantic_score: RawScore
-    normalized_semantic_score: UnitScore
-    raw_boundary_score: RawScore
-    normalized_boundary_score: UnitScore
-    raw_motion_score: RawScore = 0.0
-    normalized_motion_score: UnitScore = 0.5
-    pre_consistency_score: UnitScore
-    post_persistence_score: UnitScore
-    final_event_score: UnitScore
-
-    left_window_seconds: PositiveFloat | None = None
-    right_window_seconds: PositiveFloat | None = None
-    source: ProposalSource = "dense"
-    user_status: ProposalUserStatus = "active"
 
 
 class EventConstraint(StrictModel):
@@ -557,19 +388,6 @@ class EventConstraint(StrictModel):
                 "fixed_timestamp_seconds to make this a plain region pin"
             )
         return self
-
-
-class FixFrameEntry(StrictModel):
-    """One item of a batch commands/fix-frames call - the same per-pin data
-    a single commands/fix-frame call takes, plus event_id (implicit there
-    from the URL/single-item payload, needed here since a batch spans
-    multiple events)."""
-
-    event_id: NonEmptyStr
-    video_id: NonEmptyStr
-    frame_id: NonNegativeInt
-    timestamp_seconds: Seconds
-    region_id: NonEmptyStr | None = None
 
 
 class AdjacentGapConstraint(StrictModel):

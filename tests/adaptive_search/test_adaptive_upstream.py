@@ -1,12 +1,11 @@
 import unittest
 
 from adaptive_search.client import (
-    QueryVariant,
+    EventQuery,
     UpstreamSearchClient,
     UpstreamSearchError,
     normalize_video_id,
     parse_display_timestamp,
-    variants_from_mapping,
 )
 
 
@@ -19,7 +18,7 @@ class AdaptiveUpstreamTests(unittest.TestCase):
         with self.assertRaises(UpstreamSearchError):
             parse_display_timestamp("1:61")
 
-    def test_retrieve_candidates_preserves_event_and_variant(self):
+    def test_retrieve_candidates_preserves_event_association(self):
         calls = []
 
         def fake_transport(url, payload, timeout):
@@ -41,23 +40,20 @@ class AdaptiveUpstreamTests(unittest.TestCase):
         client = UpstreamSearchClient(transport=fake_transport)
         candidates = client.retrieve_candidates(
             session_id="session",
-            variants=[
-                QueryVariant("event-1", "anchor-vi", "cắt hành"),
-                QueryVariant("event-1", "anchor-en", "cut an onion"),
+            events=[
+                EventQuery("event-1", "cắt hành"),
+                EventQuery("event-2", "cut an onion"),
             ],
             top_k=5,
             timestamp_resolver=lambda _video, frame, _fallback: frame / 30.0,
         )
 
         self.assertEqual(len(candidates), 2)
-        self.assertEqual({item.event_id for item in candidates}, {"event-1"})
-        self.assertEqual(
-            {item.query_variant for item in candidates},
-            {"anchor-vi", "anchor-en"},
-        )
+        self.assertEqual({item.event_id for item in candidates}, {"event-1", "event-2"})
         self.assertEqual(candidates[0].timestamp_seconds, 3.0)
         self.assertEqual(candidates[0].video_id, "video-a")
         self.assertEqual(calls[0][1], {"query": "cắt hành", "top_k": 5})
+        self.assertEqual(calls[1][1], {"query": "cut an onion", "top_k": 5})
 
     def test_exact_timestamp_from_upstream_is_preferred(self):
         def fake_transport(_url, payload, _timeout):
@@ -76,7 +72,7 @@ class AdaptiveUpstreamTests(unittest.TestCase):
 
         result = UpstreamSearchClient(transport=fake_transport).retrieve_candidates(
             session_id="s",
-            variants=[QueryVariant("e", "v", "query")],
+            events=[EventQuery("e", "query")],
             top_k=1,
         )
         self.assertEqual(result[0].timestamp_seconds, 1.234)
@@ -119,15 +115,6 @@ class AdaptiveUpstreamTests(unittest.TestCase):
                 )
                 with self.assertRaises(UpstreamSearchError):
                     client.search("q", 1)
-
-    def test_mapping_is_flattened_deterministically(self):
-        variants = variants_from_mapping(
-            {"e2": {"vi": "hai"}, "e1": {"vi": "mot", "en": "one"}}
-        )
-        self.assertEqual(
-            [(item.event_id, item.variant_id) for item in variants],
-            [("e1", "en"), ("e1", "vi"), ("e2", "vi")],
-        )
 
 
 class UrlopenJsonTransportTests(unittest.TestCase):

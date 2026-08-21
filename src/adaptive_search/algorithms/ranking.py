@@ -9,7 +9,7 @@ from collections import defaultdict
 from statistics import fmean
 from typing import Sequence
 
-from ..schemas import RefinementHyperparameters, SearchConstraints, TemporalRegion, VideoPriority
+from ..schemas import VideoPriorityHyperparameters, SearchConstraints, TemporalRegion, VideoPriority
 from .constraints import _region_allowed
 from .scoring import _region_score_map
 
@@ -43,14 +43,14 @@ def distinctness_from_timestamps(
 def prioritize_videos(
     regions: Sequence[TemporalRegion],
     event_ids: Sequence[str],
-    parameters: RefinementHyperparameters | None = None,
+    parameters: VideoPriorityHyperparameters | None = None,
     constraints: SearchConstraints | None = None,
 ) -> list[VideoPriority]:
     """Rank videos by event coverage, mean evidence, weakest event, and
     distinctness (whether covered events' chosen timestamps are actually
     spread out, not collapsed onto the same physical moment)."""
 
-    parameters = parameters or RefinementHyperparameters()
+    parameters = parameters or VideoPriorityHyperparameters()
     constraints = constraints or SearchConstraints()
     ordered_event_ids = tuple(dict.fromkeys(event_ids))
     if not ordered_event_ids:

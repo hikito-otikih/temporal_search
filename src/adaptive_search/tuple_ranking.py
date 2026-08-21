@@ -218,45 +218,77 @@ def _adjacent_gap_penalty_or_rejection(
     event_ids: Sequence[str],
     timestamps: Sequence[float | None],
     constraints: SearchConstraints | None,
+    params: TupleRankingHyperparameters,
 ) -> tuple[bool, float]:
-    """`(hard_reject, mean_soft_penalty)` for `constraints.adjacent_gap_constraints`,
-    checked over pairs positionally adjacent in `event_ids` - what
-    "adjacent" means for this constraint type (a constraint's
-    `before_event_id`/`after_event_id` only takes effect when those two
-    events also happen to be list-adjacent), the same convention the
-    retired proposal-based `assemble_ordered_tuples` mechanism used before
-    it was removed. A pair with either side uncovered (`None` timestamp)
-    imposes no gap check, matching `_order_score`'s existing "an uncovered
-    event drops any constraint touching it" convention. `min_gap_seconds`/
-    `max_gap_seconds` are hard bounds (violating either rejects the whole
-    combination); `gap_lambda` (when set) additionally applies
-    `adjacent_hinge_penalty` as a soft, mean-pooled penalty subtracted from
-    the combination's score - never negative by the time it reaches that
-    call, since any gap small enough to be negative is already caught by
-    `min_gap_seconds >= 0`."""
+    """`(hard_reject, mean_soft_penalty)`, checked over pairs positionally
+    adjacent in `event_ids` - what "adjacent" means for this constraint
+    type (a constraint's `before_event_id`/`after_event_id` only takes
+    effect when those two events also happen to be list-adjacent), the
+    same convention the retired proposal-based `assemble_ordered_tuples`
+    mechanism used before it was removed. A pair with either side uncovered
+    (`None` timestamp) imposes no gap check, matching `_order_score`'s
+    existing "an uncovered event drops any constraint touching it"
+    convention.
 
-    if constraints is None or not constraints.adjacent_gap_constraints:
-        return False, 0.0
-    gap_map = {
-        (c.before_event_id, c.after_event_id): c
-        for c in constraints.adjacent_gap_constraints
-    }
+    Two independent sources of penalty, in precedence order:
+
+    1. An explicit `constraints.adjacent_gap_constraints` entry naming this
+       exact pair - `min_gap_seconds`/`max_gap_seconds` are hard bounds
+       (violating either rejects the whole combination); `gap_lambda` (when
+       set) additionally applies `adjacent_hinge_penalty` as a soft,
+       mean-pooled penalty - never negative by the time it reaches that
+       call, since any gap small enough to be negative is already caught
+       by `min_gap_seconds >= 0`. Takes full precedence for any pair it
+       names - the default below never applies to it.
+    2. `params.default_adjacent_gap_tau_seconds`/`.default_adjacent_gap_lambda`
+       - a soft-only (never rejects), always-on hinge penalty applied to
+       every pair *not* explicitly named above, so a caller gets tight,
+       coherent event sequences favored automatically with zero
+       per-session configuration. Gated on `default_adjacent_gap_lambda >
+       0.0` so a pair with the default disabled is *dropped* from the mean
+       (matching this function's uncovered-event convention) rather than
+       zero-penalized."""
+
+    gap_map = {}
+    if constraints is not None and constraints.adjacent_gap_constraints:
+        gap_map = {
+            (c.before_event_id, c.after_event_id): c
+            for c in constraints.adjacent_gap_constraints
+        }
     penalties: list[float] = []
     for i in range(len(event_ids) - 1):
         before, after = timestamps[i], timestamps[i + 1]
         if before is None or after is None:
             continue
-        constraint = gap_map.get((event_ids[i], event_ids[i + 1]))
-        if constraint is None:
-            continue
         gap = after - before
-        if gap < constraint.min_gap_seconds:
-            return True, 0.0
-        if constraint.max_gap_seconds is not None and gap > constraint.max_gap_seconds:
-            return True, 0.0
-        if constraint.gap_lambda is not None:
-            tau = constraint.hinge_tau_seconds if constraint.hinge_tau_seconds is not None else 0.0
-            penalties.append(adjacent_hinge_penalty(gap, tau_seconds=tau, gap_lambda=constraint.gap_lambda))
+        constraint = gap_map.get((event_ids[i], event_ids[i + 1]))
+        if constraint is not None:
+            if gap < constraint.min_gap_seconds:
+                return True, 0.0
+            if constraint.max_gap_seconds is not None and gap > constraint.max_gap_seconds:
+                return True, 0.0
+            if constraint.gap_lambda is not None:
+                tau = constraint.hinge_tau_seconds if constraint.hinge_tau_seconds is not None else 0.0
+                penalties.append(adjacent_hinge_penalty(gap, tau_seconds=tau, gap_lambda=constraint.gap_lambda))
+            continue
+        if params.default_adjacent_gap_lambda > 0.0:
+            # abs(), not the signed gap the explicit-constraint branch above
+            # uses: this default is purely about temporal distance/
+            # compactness, not direction - an out-of-order pair (negative
+            # signed gap) is _order_score's job to penalize, not this one's,
+            # and adjacent_hinge_penalty() itself hard-rejects a negative
+            # input, which a signed gap here would trigger routinely (this
+            # default runs unconditionally, unlike the opt-in path above,
+            # which only ever reaches gap_lambda after its own
+            # min_gap_seconds default of 0.0 has already rejected any
+            # negative-gap combination first).
+            penalties.append(
+                adjacent_hinge_penalty(
+                    abs(gap),
+                    tau_seconds=params.default_adjacent_gap_tau_seconds,
+                    gap_lambda=params.default_adjacent_gap_lambda,
+                )
+            )
     return False, (fmean(penalties) if penalties else 0.0)
 
 
@@ -359,7 +391,7 @@ def assemble_region_tuples_for_video(
         )
         if _tuple_span_violation(timestamps, constraints):
             return None
-        rejected, gap_penalty = _adjacent_gap_penalty_or_rejection(event_ids, timestamps, constraints)
+        rejected, gap_penalty = _adjacent_gap_penalty_or_rejection(event_ids, timestamps, constraints, params)
         if rejected:
             return None
         scores = [region.normalized_coarse_score or 0.0 if region is not None else 0.0 for region in selected]
@@ -642,8 +674,8 @@ def build_order_constraints(
 ) -> list[tuple[int, int]] | None:
     """Directed (predecessor_index, successor_index) pairs, transitively
     closed, derived from each event's real `temporal_relation` +
-    `reference_event_id` - the direction comes from the relation the rewrite
-    stage actually classified, not from an event's position in the query.
+    `reference_event_id` - the direction comes from the relation the caller
+    actually specified, not from an event's position in the query.
 
     - `"after"` (event $i$, reference $r$): direct edge $r \\to i$ ($r$
       precedes $i$).
@@ -668,8 +700,8 @@ def build_order_constraints(
     non-adjacent events.
 
     Returns `None` (defer to `_order_score`'s own adjacent-chain default)
-    only when no event carries any relation data at all, e.g.\\ these
-    `EventDefinition`s never went through `rewrite_bridge.py`.
+    only when no event carries any relation data at all, e.g.\\ the caller
+    never set `temporal_relation`/`reference_event_id` on any event.
     """
 
     index_by_id = {event.event_id: index for index, event in enumerate(events)}

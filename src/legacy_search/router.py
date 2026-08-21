@@ -15,7 +15,7 @@ router = APIRouter(tags=["legacy temporal search"])
 @router.post("/temporal-search", response_model=TemporalSearchResponse)
 def search(request: TemporalSearchRequest):
     try:
-        results, boundary_refinement_capability, search_truncated = temporal_search(
+        results, search_truncated = temporal_search(
             request.query,
             request.top_k_tuple,
             request.top_k_each_query,
@@ -24,12 +24,10 @@ def search(request: TemporalSearchRequest):
             request.objectFilterMode,
             request.object_name_list,
             request.objectThreshold,
-            request.apply_boundary_refinement,
         )
         return {
             "query": request.query,
             "results": results,
-            "boundary_refinement_capability": boundary_refinement_capability,
             # True if at least one video's backtracking search hit its node
             # budget (searchers/*.MAX_TRAVERSAL_NODES) before exploring
             # exhaustively - results are still the best found so far, but

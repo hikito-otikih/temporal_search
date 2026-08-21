@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import os
 
-from .config import configure_from_environment
-from .refinement_runtime import BoundaryRefinementRuntime
 from .client import UpstreamSearchClient
 from .service import AdaptiveSearchService
 from .constants import (
@@ -20,7 +18,6 @@ from .constants import (
 )
 
 adaptive_service = AdaptiveSearchService()
-boundary_refinement_runtime = BoundaryRefinementRuntime()
 
 upstream_search_client = UpstreamSearchClient(
     next(
@@ -28,7 +25,3 @@ upstream_search_client = UpstreamSearchClient(
         UPSTREAM_URL_FALLBACK,
     )
 )
-
-
-def configure_boundary_refinement_runtime() -> None:
-    configure_from_environment(adaptive_service, boundary_refinement_runtime)

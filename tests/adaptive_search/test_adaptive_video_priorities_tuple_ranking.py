@@ -9,76 +9,21 @@ thresholds, order scoring, confidence gating, the order_weight=0 <->
 prioritize_videos() equivalence) is covered at the pure-function level in
 test_tuple_ranking.py against directly-constructed TemporalRegion/
 SparseCandidate objects. These tests cover integration instead: does the
-response shape carry the right fields, and - the one piece of real wiring
-logic that lives in router.py itself, not in tuple_ranking.py - does
-boundary refinement seed from the winning tuple's own per-event timestamps.
+response shape carry the right fields, and does matched_frame_ids correctly
+reflect the winning tuple's own per-event frame choice.
 """
 
 import unittest
 
-import numpy as np
 from fastapi.testclient import TestClient
 
 from adaptive_search.algorithms import prioritize_videos
-from adaptive_search.dependencies import adaptive_service, boundary_refinement_runtime
-from adaptive_search.embedding import l2_normalize
-from adaptive_search.providers import FrameProviderCapabilities, FrameReference
+from adaptive_search.dependencies import adaptive_service
 from main import app
 
 
-class FakeFrameProvider:
-    def __init__(self, known_video_ids=("video_full",)):
-        self._known = set(known_video_ids)
-
-    def capabilities(self):
-        return FrameProviderCapabilities(
-            available=True, supports_batch=True, supports_dense_sampling=True, supports_thumbnails=False
-        )
-
-    def get_frames(self, video_id, pts_ms):
-        return [self._frame(video_id, pts) for pts in pts_ms]
-
-    @staticmethod
-    def _frame(video_id, pts_ms):
-        phase = (pts_ms // 1000) % 3
-        image = np.eye(3, dtype=np.float32)[phase]
-        return FrameReference(video_id=video_id, pts_ms=pts_ms, frame_index=pts_ms // 40, image=image)
-
-    @property
-    def catalog(self):
-        return _FakeCatalog(self._known)
-
-
-class _FakeMetadata:
-    def __init__(self, fps=30.0, duration_ms=600_000):
-        self.fps = fps
-        self.duration_ms = duration_ms
-
-
-class _FakeCatalog:
-    def __init__(self, known_video_ids):
-        self._known = known_video_ids
-
-    def metadata(self, video_id):
-        return _FakeMetadata() if video_id in self._known else None
-
-
-class FakeEmbedder:
-    model_id = "fake/siglip"
-    revision = "commit-abc123"
-    output_dimension = 3
-    preprocess_version = "fake-rgb-v1"
-    instruction = ""
-
-    def encode_texts(self, texts):
-        return np.eye(3, dtype=np.float32)
-
-    def encode_images(self, images):
-        return l2_normalize(np.asarray(images, dtype=np.float32))
-
-
 def event(event_id, text, *, temporal_relation=None, reference_event_id=None):
-    payload = {"event_id": event_id, "original_query": text, "anchor_query": text}
+    payload = {"event_id": event_id, "anchor_query": text}
     if temporal_relation is not None:
         payload["temporal_relation"] = temporal_relation
     if reference_event_id is not None:
@@ -95,7 +40,6 @@ def candidate(candidate_id, session_id, event_id, video_id, timestamp_seconds, r
         "frame_id": int(timestamp_seconds * 30),
         "timestamp_seconds": timestamp_seconds,
         "raw_relevance_score": raw_relevance_score,
-        "query_variant": f"{event_id}-anchor-en-0",
     }
 
 
@@ -103,30 +47,15 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
     def setUp(self):
         adaptive_service.repository.clear()
         self.client = TestClient(app)
-        self._original_provider = boundary_refinement_runtime.frame_provider
-        self._original_embedder = boundary_refinement_runtime.embedder
-        # Fakes are installed before any session is created (not after, as
-        # individual tests used to do) so that _apply_runtime_embedding_default
-        # stamps *this* embedder's own pinned identity into a new session's
-        # hyperparameters.refinement.embedding_model, instead of whatever real
-        # model happens to be process-configured (often revision="main",
-        # which the live-refinement identity check now correctly rejects as
-        # unpinned - see refinement_runtime._validate_embedder_identity).
-        boundary_refinement_runtime.frame_provider = FakeFrameProvider(known_video_ids=["video_full"])
-        boundary_refinement_runtime.embedder = FakeEmbedder()
 
     def tearDown(self):
         self.client.close()
-        boundary_refinement_runtime.frame_provider = self._original_provider
-        boundary_refinement_runtime.embedder = self._original_embedder
 
-    def _create_session(self, events, tuple_ranking_overrides=None, refinement_overrides=None):
+    def _create_session(self, events, tuple_ranking_overrides=None):
         payload = {"events": events}
         hyperparameters = {}
         if tuple_ranking_overrides is not None:
             hyperparameters["tuple_ranking"] = tuple_ranking_overrides
-        if refinement_overrides is not None:
-            hyperparameters["refinement"] = refinement_overrides
         if hyperparameters:
             payload["hyperparameters"] = hyperparameters
         response = self.client.post("/v1/search-sessions", json=payload)
@@ -141,11 +70,11 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
 
     def test_production_defaults_does_not_crash(self):
-        # Smoke test at the actual shipped configuration (order_weight=0.8,
+        # Smoke test at the actual shipped configuration (order_weight=1.2,
         # confidence_gate="threshold"@0.5) - precise score/order assertions
         # for this config are covered at the pure-function level; here we
-        # only need "the real HTTP+RRF+region pipeline feeding into it
-        # doesn't blow up and returns a well-formed response."
+        # only need "the real HTTP+region pipeline feeding into it doesn't
+        # blow up and returns a well-formed response."
         session_id = self._create_session([event("e1", "cut onion"), event("e2", "fry onion")])
         self._submit_candidates(
             session_id, ["e1", "e2"],
@@ -198,15 +127,12 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         reordered_scores = {item["video_id"]: item["priority_score"] for item in reordered["items"]}
         self.assertEqual(reordered_scores, baseline_scores)
 
-    def test_fixed_frame_is_respected_by_ranking_itself_not_only_by_boundary_refinement(self):
-        # Distinct from test_user_fixed_frame_still_wins_over_tuple_ranking
-        # (which only checks the opt-in apply_boundary_refinement per-event
-        # breakdown): commands/fix-frame's timestamp is arbitrary, with no
-        # candidate anywhere near it, so the ranker itself must synthesize a
-        # region for it - confirmed here via mean_best_event_score (should
-        # land at 1.0, the synthesized region's confidence, not near the
-        # real 0.6 candidate's score) with apply_boundary_refinement never
-        # requested at all.
+    def test_fixed_frame_is_respected_by_ranking_itself(self):
+        # commands/fix-frame's timestamp is arbitrary, with no candidate
+        # anywhere near it, so the ranker itself must synthesize a region for
+        # it - confirmed here via mean_best_event_score (should land at 1.0,
+        # the synthesized region's confidence, not near the real 0.6
+        # candidate's score).
         session_id = self._create_session([event("e1", "cut onion")])
         self._submit_candidates(
             session_id, ["e1"],
@@ -230,20 +156,25 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.assertEqual(item["video_id"], "video_full")
         self.assertAlmostEqual(item["mean_best_event_score"], 1.0)
 
-    def test_video_distinctness_weight_affects_ranking(self):
-        # Reproduces the reported gap directly: video_distinctness_weight
-        # was fully validated/settable but read only by prioritize_videos(),
-        # which this endpoint stopped calling entirely - so two videos with
-        # identical region scores but different distinctness got identical
-        # priority_score (0.5/0.5) regardless of the weight. video_a's two
-        # events collapse onto the same timestamp (distinctness 0);
-        # video_b's are 90s apart (distinctness 1, norm=3.0s default) -
-        # same region scores otherwise, order_weight=0 so the raw tuple
-        # score is driven only by region_mean, identical for both.
+    def test_distinctness_is_reported_but_does_not_affect_ranking(self):
+        # distinctness is now a purely descriptive VideoPriority field, not a
+        # ranking input at this endpoint (the old video_distinctness_weight
+        # session hyperparameter was removed - it degenerated to a no-op
+        # here regardless of its value, see video_priorities.py's comment).
+        # video_a's two events collapse onto the same timestamp (distinctness
+        # 0); video_b's are 90s apart (distinctness 1) - same region scores
+        # otherwise. order_weight=0 removes any order contribution, and
+        # default_adjacent_gap_lambda=0.0 isolates from the separate
+        # default-on gap penalty (which would otherwise cost video_b's 90s
+        # gap on its own, unrelated to distinctness) - with both off, the
+        # raw tuple score is driven only by region_mean, identical for both.
+        # distinctness must still differ, but priority_score must not.
         session_id = self._create_session(
             [event("e1", "cut onion"), event("e2", "fry onion")],
-            tuple_ranking_overrides={"order_weight": 0.0},
-            refinement_overrides={"video_distinctness_weight": 100.0},
+            tuple_ranking_overrides={
+                "order_weight": 0.0,
+                "default_adjacent_gap_lambda": 0.0,
+            },
         )
         self._submit_candidates(
             session_id, ["e1", "e2"],
@@ -259,47 +190,9 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         items = {item["video_id"]: item for item in response.json()["items"]}
         self.assertEqual(items["video_a"]["distinctness"], 0.0)
         self.assertEqual(items["video_b"]["distinctness"], 1.0)
-        self.assertGreater(items["video_b"]["priority_score"], items["video_a"]["priority_score"])
-        self.assertEqual(response.json()["items"][0]["video_id"], "video_b")
-
-    def test_boundary_refinement_seeds_from_the_winning_tuple(self):
-        # e1's best-scoring candidate (10.0) and e2's best-scoring candidate
-        # (5.0) are chronologically INVERTED (e1 after e2) - an independent,
-        # order-blind pick would use exactly this inverted pair. A large,
-        # ungated order_weight must make the winning tuple instead prefer
-        # e1=10.0 paired with e2's WORSE-scored but chronologically-later
-        # candidate (60.0), since 10.0 < 60.0 is in order. relative_delta=1.0
-        # ensures the worse candidate isn't pooled out before it gets a
-        # chance to be chosen.
-        session_id = self._create_session(
-            [event("e1", "cut onion"), event("e2", "fry onion")],
-            tuple_ranking_overrides={
-                "relative_delta": 1.0,
-                "order_weight": 0.8,
-                "confidence_gate": "none",
-            },
+        self.assertAlmostEqual(
+            items["video_a"]["priority_score"], items["video_b"]["priority_score"]
         )
-        self._submit_candidates(
-            session_id, ["e1", "e2"],
-            [
-                candidate("c1", session_id, "e1", "video_full", 10.0, 0.9),
-                candidate("c3", session_id, "e2", "video_full", 5.0, 0.9),
-                candidate("c4", session_id, "e2", "video_full", 60.0, 0.5),
-            ],
-        )
-
-        response = self.client.get(
-            f"/v1/search-sessions/{session_id}/video-priorities",
-            params={"apply_boundary_refinement": "true"},
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        events = {
-            e["event_id"]: e for e in response.json()["items"][0]["boundary_refinement"]["events"]
-        }
-        self.assertEqual(events["e1"]["anchor_seconds"], 10.0)
-        self.assertEqual(events["e2"]["anchor_seconds"], 60.0)
-        self.assertEqual(events["e1"]["source"], "tuple_ranking")
-        self.assertEqual(events["e2"]["source"], "tuple_ranking")
 
     def test_video_priority_fields_reflect_the_actual_winning_tuple(self):
         # e2's winning tuple picks the order-satisfying 60.0s candidate
@@ -316,6 +209,13 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
                 "relative_delta": 1.0,
                 "order_weight": 0.8,
                 "confidence_gate": "none",
+                # Isolate from the default-on gap penalty - e1@10/e2@60's 50s
+                # gap is irrelevant to what this test is actually about
+                # (joint vs. independent-per-event picking); left on, it
+                # outweighs the order bonus for this fixture's deliberately
+                # narrow margin and flips the winner back to e2@5.0, which
+                # defeats the point of the test.
+                "default_adjacent_gap_lambda": 0.0,
             },
         )
         self._submit_candidates(
@@ -328,9 +228,7 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         )
 
         bundle = adaptive_service.get_session(session_id)
-        independent = prioritize_videos(
-            bundle.artifacts.regions, ["e1", "e2"], bundle.session.hyperparameters.refinement,
-        )[0]
+        independent = prioritize_videos(bundle.artifacts.regions, ["e1", "e2"])[0]
 
         response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
         self.assertEqual(response.status_code, 200, response.text)
@@ -351,7 +249,9 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         # e2's 50.0 - satisfies the relation). A relation-aware, ungated
         # order bonus should prefer 80.0; a list-position default would have
         # preferred 5.0 (treating "e1 then e2" as the expected order, which
-        # is not what this session's relation actually claims).
+        # is not what this session's relation actually claims). Verified via
+        # matched_frame_ids, in event order [e1, e2]: frame_id = int(seconds
+        # * 30), so 80.0 -> "2400" and 50.0 -> "1500".
         session_id = self._create_session(
             [
                 event("e1", "cut onion", temporal_relation="after", reference_event_id="e2"),
@@ -368,22 +268,17 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
             ],
         )
 
-        response = self.client.get(
-            f"/v1/search-sessions/{session_id}/video-priorities",
-            params={"apply_boundary_refinement": "true"},
-        )
+        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
         self.assertEqual(response.status_code, 200, response.text)
-        events = {
-            e["event_id"]: e for e in response.json()["items"][0]["boundary_refinement"]["events"]
-        }
-        self.assertEqual(events["e1"]["anchor_seconds"], 80.0)
-        self.assertEqual(events["e2"]["anchor_seconds"], 50.0)
+        item = response.json()["items"][0]
+        self.assertEqual(item["matched_frame_ids"], ["2400", "1500"])
 
     def test_user_fixed_frame_still_wins_over_tuple_ranking(self):
         # commands/fix-frame's authoritative-constraint short-circuit must
         # keep taking priority over BOTH independent selection AND tuple
         # ranking - a user's explicit correction shouldn't be second-guessed
-        # by either automatic mechanism.
+        # by either automatic mechanism. Verified via matched_frame_ids: e1's
+        # entry must be the fixed frame_id (1260), not either candidate's.
         session_id = self._create_session(
             [event("e1", "cut onion"), event("e2", "fry onion")],
             tuple_ranking_overrides={"relative_delta": 1.0, "order_weight": 0.8, "confidence_gate": "none"},
@@ -409,14 +304,10 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         )
         self.assertEqual(fix_response.status_code, 200, fix_response.text)
 
-        response = self.client.get(
-            f"/v1/search-sessions/{session_id}/video-priorities",
-            params={"apply_boundary_refinement": "true"},
-        )
+        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
         self.assertEqual(response.status_code, 200, response.text)
-        events = {e["event_id"]: e for e in response.json()["items"][0]["boundary_refinement"]["events"]}
-        self.assertEqual(events["e1"]["source"], "user_fixed")
-        self.assertEqual(events["e1"]["anchor_seconds"], 42.0)
+        item = response.json()["items"][0]
+        self.assertEqual(item["matched_frame_ids"][0], "1260")
 
 
 if __name__ == "__main__":

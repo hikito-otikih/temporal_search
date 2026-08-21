@@ -15,16 +15,12 @@ from .invalidation import (
 )
 from .schemas import (
     EventDefinition,
-    FixFrameEntry,
     SearchConstraints,
     SearchHyperparameters,
     SparseCandidate,
 )
-from .providers import FrameProvider, UnavailableFrameProvider
-from .retrieval import fuse_candidates_rrf
 from .service_helpers import (
     _apply_fix_frame,
-    _clear_fixed_proposal_status,
     _complete_run,
     _deep_merge,
     _ensure_unique_ids,
@@ -35,7 +31,6 @@ from .service_helpers import (
     _validate_constraints_for_events,
     _validate_event_relation_graph,
     _validate_event_subset,
-    _validate_retrieval_variants,
 )
 from .session import (
     InMemorySessionRepository,
@@ -52,10 +47,8 @@ class AdaptiveSearchService:
     def __init__(
         self,
         repository: InMemorySessionRepository | None = None,
-        frame_provider: FrameProvider | None = None,
     ) -> None:
         self.repository = repository or InMemorySessionRepository()
-        self.frame_provider = frame_provider or UnavailableFrameProvider()
 
     def create_session(
         self,
@@ -65,20 +58,16 @@ class AdaptiveSearchService:
         searcher_type: SearcherType = "adaptive_temporal",
         hyperparameters: SearchHyperparameters | None = None,
         constraints: SearchConstraints | None = None,
-        retrieval_variants: dict[str, list[str]] | None = None,
     ) -> SessionBundle:
         selected_constraints = constraints or SearchConstraints()
         _validate_constraints_for_events(events, selected_constraints)
         _validate_event_relation_graph(events)
-        selected_variants = dict(retrieval_variants or {})
-        _validate_retrieval_variants(events, selected_variants)
         return self.repository.create(
             events=events,
             common_query=common_query,
             searcher_type=searcher_type,
             hyperparameters=hyperparameters or SearchHyperparameters(),
             constraints=selected_constraints,
-            retrieval_variants=selected_variants,
         )
 
     def get_session(self, session_id: str) -> SessionBundle:
@@ -183,52 +172,13 @@ class AdaptiveSearchService:
         video_scope_changed = bool(
             root_paths & {"allowed_video_ids", "rejected_video_ids"}
         )
-        event_scope_changed = "event_constraints" in root_paths
         if video_scope_changed:
             invalidated = invalidated_for_constraint("mark_videos")
-        elif event_scope_changed:
-            invalidated = ["proposal", "tuple"]
         else:
             invalidated = ["tuple"]
 
         def mutate(bundle: SessionBundle) -> None:
             _validate_constraints_for_events(bundle.session.events, constraints)
-            # fix_frame() marks an EventProposal user_status="fixed" and
-            # relies on clear_event_constraint() to flip it back via
-            # _clear_fixed_proposal_status() - but this generic replace
-            # bypasses both of those command endpoints, so a caller that
-            # clears or *replaces* an event's pin via a raw PUT here (rather
-            # than commands/fix-frame or commands/clear-constraint) left
-            # GET /proposals reporting a stale "fixed" status for a proposal
-            # the constraint no longer names - not just on full removal:
-            # replacing video A's pin with video B's (or the same video with
-            # a different frame/timestamp) via raw PUT leaves video A's
-            # proposal marked fixed too, since it compared only "is there
-            # still some pin" rather than "is it still the same pin".
-            # Comparing every identifying field catches both cases; this
-            # module has no way to *re*-mark a new match as fixed the way
-            # fix_frame() does (a raw PUT carries no separate video_id/
-            # frame_id/timestamp_seconds to correlate against
-            # bundle.artifacts.proposals), so it only ever clears stale
-            # status, never sets new.
-            previous_event_constraints = bundle.session.constraints.event_constraints
-            for event_id, previous in previous_event_constraints.items():
-                if previous.fixed_video_id is None:
-                    continue
-                updated = constraints.event_constraints.get(event_id)
-                pin_unchanged = updated is not None and (
-                    updated.fixed_video_id,
-                    updated.fixed_region_id,
-                    updated.fixed_frame_id,
-                    updated.fixed_timestamp_seconds,
-                ) == (
-                    previous.fixed_video_id,
-                    previous.fixed_region_id,
-                    previous.fixed_frame_id,
-                    previous.fixed_timestamp_seconds,
-                )
-                if not pin_unchanged:
-                    _clear_fixed_proposal_status(bundle, event_id)
             bundle.session.constraints = constraints.model_copy(deep=True)
             bundle.session.last_invalidated_stages = invalidated
 
@@ -257,10 +207,6 @@ class AdaptiveSearchService:
                     "candidate event_id must be listed in replaced event_ids"
                 )
         _ensure_unique_ids((candidate.id for candidate in candidates), "candidate")
-        fused_candidates = fuse_candidates_rrf(
-            candidates,
-            snapshot.session.hyperparameters.retrieval,
-        )
 
         run = new_run(snapshot, ["retrieval", "region"])
         started = perf_counter()
@@ -271,30 +217,24 @@ class AdaptiveSearchService:
                 for item in bundle.artifacts.candidates
                 if item.event_id not in replaced_events
             ]
-            bundle.artifacts.candidates = [*retained, *fused_candidates]
+            bundle.artifacts.candidates = [*retained, *candidates]
             # atomic_regions, not cluster_temporal_regions - see that
             # function's docstring (algorithms/regions.py) for why merging
             # candidates was dropped. Zero-width (no margin) - ranking and
             # live boundary refinement never read region span.
             bundle.artifacts.regions = atomic_regions(bundle.artifacts.candidates)
-            bundle.artifacts.proposals = [
-                item
-                for item in bundle.artifacts.proposals
-                if item.event_id not in replaced_events
-            ]
             bundle.session.status = "ready"
             bundle.session.last_invalidated_stages = [
                 "retrieval",
                 "region",
                 "refinement",
-                "proposal",
                 "tuple",
             ]
             completed = _complete_run(
                 run,
                 started,
                 input_candidates=len(candidates),
-                fused_candidates=len(bundle.artifacts.candidates),
+                total_candidates=len(bundle.artifacts.candidates),
                 regions=len(bundle.artifacts.regions),
             )
             bundle.runs.append(completed)
@@ -355,40 +295,6 @@ class AdaptiveSearchService:
             invalidated,
         )
 
-    def fix_frames(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        fixes: list[FixFrameEntry],
-    ) -> tuple[SessionBundle, list[str]]:
-        """Batch form of fix_frame() - applies every item inside one mutation,
-        so N pins cost one expected_revision check and one revision bump
-        instead of N round trips each racing the next against a concurrent
-        caller. Items are applied in order; a later item pinning the same
-        event_id as an earlier one simply overrides it, matching what N
-        sequential fix_frame() calls would do."""
-
-        invalidated = invalidated_for_constraint("fix_frame")
-
-        def mutate(bundle: SessionBundle) -> None:
-            for fix in fixes:
-                _apply_fix_frame(
-                    bundle,
-                    session_id=session_id,
-                    event_id=fix.event_id,
-                    video_id=fix.video_id,
-                    frame_id=fix.frame_id,
-                    timestamp_seconds=fix.timestamp_seconds,
-                    region_id=fix.region_id,
-                )
-            bundle.session.last_invalidated_stages = invalidated
-
-        return (
-            self.repository.mutate(session_id, expected_revision, mutate),
-            invalidated,
-        )
-
     def clear_event_constraint(
         self,
         session_id: str,
@@ -400,7 +306,6 @@ class AdaptiveSearchService:
 
         def mutate(bundle: SessionBundle) -> None:
             _event_index(bundle, event_id)
-            _clear_fixed_proposal_status(bundle, event_id)
             payload = bundle.session.constraints.model_dump()
             event_constraints = dict(payload["event_constraints"])
             event_constraints.pop(event_id, None)

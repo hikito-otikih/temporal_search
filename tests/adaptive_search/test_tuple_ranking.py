@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import unittest
+from statistics import fmean
 
 from adaptive_search.algorithms import prioritize_videos
 from adaptive_search.schemas import (
     AdjacentGapConstraint,
     EventConstraint,
     EventDefinition,
-    RefinementHyperparameters,
     SearchConstraints,
     SparseCandidate,
     TemporalRegion,
     TupleRankingHyperparameters,
+    VideoPriorityHyperparameters,
 )
 from adaptive_search.tuple_ranking import (
     _effective_order_weight,
@@ -48,7 +49,6 @@ def _candidate(candidate_id, *, event_id, video_id, timestamp_seconds, raw_relev
         frame_id=int(timestamp_seconds * 30),
         timestamp_seconds=timestamp_seconds,
         raw_relevance_score=raw_relevance_score,
-        query_variant="v0",
     )
 
 
@@ -250,6 +250,7 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         params = TupleRankingHyperparameters(
             relative_delta=1.0, order_weight=1.0, confidence_gate="none",
             max_combinations_per_video=10, max_tuples_per_video=1,
+            default_adjacent_gap_lambda=0.0,  # isolate this from the new default gap penalty - not what this regression test is about
         )
         tuples = assemble_region_tuples_for_video(
             "v1", ["e1", "e2"], e1_regions + [e2_region], candidates_by_id, params,
@@ -303,6 +304,17 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         params = TupleRankingHyperparameters(
             relative_delta=1.0, max_regions_per_event=20,
             max_combinations_per_video=10, max_tuples_per_video=5,
+            # This test's e1/e2 timestamps are ~80-118s apart by construction
+            # (irrelevant to what it's actually testing - heap/tie-break
+            # mechanics under a tight cap) - upper_bound() deliberately never
+            # accounts for gap penalty (admissible-but-not-tight, see its own
+            # comment), so a large default penalty here can make every
+            # completed leaf's real score come in worse than still-optimistic
+            # partials, and get trimmed out of the heap before ever being
+            # popped - a real interaction, but with this test's artificial
+            # cap=10 for ~400 possible leaves, not with production's actual
+            # defaults (cap=10_000_000). Isolate this test from that.
+            default_adjacent_gap_lambda=0.0,
         )
         tuples = assemble_region_tuples_for_video(
             "v1", ["e1", "e2"], e1_regions + e2_regions, candidates_by_id, params,
@@ -345,6 +357,7 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         params = TupleRankingHyperparameters(
             relative_delta=1.0, order_weight=0.8, confidence_gate="none",
             max_combinations_per_video=3, max_tuples_per_video=1,
+            default_adjacent_gap_lambda=0.0,  # isolate this from the new default gap penalty - not what this regression test is about
         )
         tuples = assemble_region_tuples_for_video(
             "v1", ["e1", "e2"], [e1_region] + e2_regions, candidates_by_id, params,
@@ -386,6 +399,13 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         params = TupleRankingHyperparameters(
             relative_delta=1.0, max_combinations_per_video=5, max_tuples_per_video=1,
             max_regions_per_event=pool_size,
+            # See the same note in test_heavily_tied_pool_still_returns_
+            # results_under_a_modest_cap: this test's ~1000s e1/e2 gap is
+            # irrelevant to what it tests (heap growth bounding), and a
+            # large default gap penalty under this artificial cap=5 can
+            # starve every completed leaf out of the heap before it's ever
+            # popped - isolate this test from that.
+            default_adjacent_gap_lambda=0.0,
         )
 
         peak_heap_size = 0
@@ -504,6 +524,77 @@ class AssembleRegionTuplesTests(unittest.TestCase):
         self.assertEqual(tuples[0].region_ids, ("r1_close", "r2"))
 
 
+class DefaultAdjacentGapPenaltyTests(unittest.TestCase):
+    def test_tight_gap_outranks_scattered_gap_with_no_constraints_configured(self) -> None:
+        # Same region_mean_score and order_score either way (both events
+        # cover, both timestamps increasing) - only the gap between them
+        # differs. No SearchConstraints at all: this is purely the new
+        # default-on penalty at work.
+        regions = [
+            _region("e1_tight", event_id="e1", video_id="tight", candidate_ids=["c1t"], normalized_coarse_score=0.8),
+            _region("e2_tight", event_id="e2", video_id="tight", candidate_ids=["c2t"], normalized_coarse_score=0.8),
+            _region("e1_wide", event_id="e1", video_id="wide", candidate_ids=["c1w"], normalized_coarse_score=0.8),
+            _region("e2_wide", event_id="e2", video_id="wide", candidate_ids=["c2w"], normalized_coarse_score=0.8),
+        ]
+        candidates_by_id = {
+            "c1t": _candidate("c1t", event_id="e1", video_id="tight", timestamp_seconds=100.0, raw_relevance_score=1.0),
+            "c2t": _candidate("c2t", event_id="e2", video_id="tight", timestamp_seconds=110.0, raw_relevance_score=1.0),
+            "c1w": _candidate("c1w", event_id="e1", video_id="wide", timestamp_seconds=100.0, raw_relevance_score=1.0),
+            "c2w": _candidate("c2w", event_id="e2", video_id="wide", timestamp_seconds=400.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(relative_delta=1.0)
+        ranking, _ = rank_videos_by_region_tuples(regions, candidates_by_id, ["e1", "e2"], params)
+        self.assertEqual([video_id for video_id, _ in ranking], ["tight", "wide"])
+
+    def test_explicit_constraint_takes_precedence_over_the_default_for_that_pair(self) -> None:
+        # (e1,e2) is explicitly configured (its own, different gap_lambda) -
+        # the default must not also apply to it. (e2,e3) is unconfigured -
+        # it must still get the new default penalty.
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.8, start_seconds=0.0, end_seconds=0.0),
+            _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.8, start_seconds=100.0, end_seconds=100.0),
+            _region("r3", event_id="e3", video_id="v1", candidate_ids=["c3"], normalized_coarse_score=0.8, start_seconds=200.0, end_seconds=200.0),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=0.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=100.0, raw_relevance_score=1.0),
+            "c3": _candidate("c3", event_id="e3", video_id="v1", timestamp_seconds=200.0, raw_relevance_score=1.0),
+        }
+        # Explicit (e1,e2): huge tau (200s) -> its own 100s gap costs nothing,
+        # overriding what the default (tau=20) would have charged it.
+        constraints = SearchConstraints(
+            adjacent_gap_constraints=(
+                AdjacentGapConstraint(before_event_id="e1", after_event_id="e2", hinge_tau_seconds=200.0, gap_lambda=1.0),
+            )
+        )
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, order_weight=0.0,
+            default_adjacent_gap_tau_seconds=20.0, default_adjacent_gap_lambda=0.05,
+        )
+        tuples = assemble_region_tuples_for_video(
+            "v1", ["e1", "e2", "e3"], regions, candidates_by_id, params, constraints=constraints,
+        )
+        # (e1,e2) explicit: gap=100, tau=200 -> penalty 0.
+        # (e2,e3) default: gap=100, tau=20, lambda=0.05 -> penalty 0.05*80=4.0.
+        # gap_penalty is the MEAN across every checked pair, explicit or
+        # default alike - not just the unconfigured one.
+        expected = fmean([0.8, 0.8, 0.8]) - fmean([0.0, 4.0])
+        self.assertAlmostEqual(tuples[0].score, expected)
+
+    def test_default_lambda_zero_exactly_reproduces_pre_change_behavior(self) -> None:
+        regions = [
+            _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.8),
+            _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.6),
+        ]
+        candidates_by_id = {
+            "c1": _candidate("c1", event_id="e1", video_id="v1", timestamp_seconds=0.0, raw_relevance_score=1.0),
+            "c2": _candidate("c2", event_id="e2", video_id="v1", timestamp_seconds=500.0, raw_relevance_score=1.0),
+        }
+        params = TupleRankingHyperparameters(relative_delta=1.0, order_weight=0.0, default_adjacent_gap_lambda=0.0)
+        tuples = assemble_region_tuples_for_video("v1", ["e1", "e2"], regions, candidates_by_id, params)
+        self.assertAlmostEqual(tuples[0].score, (0.8 + 0.6) / 2.0)
+
+
 class ConfidenceGateTests(unittest.TestCase):
     def test_none_gate_is_unchanged(self) -> None:
         params = TupleRankingHyperparameters(order_weight=0.3, confidence_gate="none")
@@ -527,10 +618,15 @@ class ConfidenceGateTests(unittest.TestCase):
         # configuration (region_tuple_ranking_results.md, Round 2) - this
         # pins that fact so a future default change is a deliberate edit,
         # not a silent drift away from the validated configuration.
+        # order_weight and default_adjacent_gap_tau_seconds are the two
+        # deliberate manual exceptions (0.8 -> 1.2, and 20.0 -> 25.0 once
+        # real contest answers showed a 25fps video's gaps run higher - see
+        # each field's own docstring) - neither is benchmark-re-validated.
         params = TupleRankingHyperparameters()
         self.assertEqual(params.confidence_gate, "threshold")
         self.assertEqual(params.confidence_gate_threshold, 0.5)
-        self.assertEqual(params.order_weight, 0.8)
+        self.assertEqual(params.order_weight, 1.2)
+        self.assertEqual(params.default_adjacent_gap_tau_seconds, 25.0)
         self.assertEqual(params.pooling, "max")
         # Round 8: N and the combinations cap are effectively unbounded -
         # a real exhaustive search (n=60) found the old N=20/cap=20000
@@ -633,12 +729,15 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
             "v2c1": _candidate("v2c1", event_id="e1", video_id="v2", timestamp_seconds=50.0, raw_relevance_score=1.0),
             "v2c2": _candidate("v2c2", event_id="e2", video_id="v2", timestamp_seconds=5.0, raw_relevance_score=1.0),
         }
-        params = TupleRankingHyperparameters(relative_delta=1.0, order_weight=0.0, pooling="max")
+        params = TupleRankingHyperparameters(
+            relative_delta=1.0, order_weight=0.0, pooling="max",
+            default_adjacent_gap_lambda=0.0,  # prioritize_videos() has no gap-penalty concept to compare against
+        )
         ranking, _ = rank_videos_by_region_tuples(regions, candidates_by_id, ["e1", "e2"], params)
 
         baseline = prioritize_videos(
             regions, ["e1", "e2"],
-            RefinementHyperparameters(video_coverage_weight=0.0, video_mean_weight=1.0, video_min_weight=0.0),
+            VideoPriorityHyperparameters(video_coverage_weight=0.0, video_mean_weight=1.0, video_min_weight=0.0),
         )
         baseline_order = [p.video_id for p in baseline]
         new_order = [video_id for video_id, _ in ranking]
@@ -647,10 +746,9 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
         for video_id, score in ranking:
             self.assertAlmostEqual(score, baseline_by_video[video_id])
 
-    def test_winning_tuple_anchors_are_available_for_seeding_refinement(self) -> None:
-        # This is the exact shape router.py's get_video_priorities() reads
-        # to seed boundary refinement from the winning tuple instead of an
-        # independent select_event_seeds() call.
+    def test_winning_tuple_anchors_are_available_per_event(self) -> None:
+        # This is the exact shape video_priorities.py's _matched_frame_ids()
+        # reads to resolve each event's frame_id from the winning tuple.
         regions = [
             _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.8),
             _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.7),
@@ -836,7 +934,6 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
 def _event(event_id, *, relation="unknown", reference=None):
     return EventDefinition(
         event_id=event_id,
-        original_query=event_id,
         anchor_query=event_id,
         temporal_relation=relation,
         reference_event_id=reference,

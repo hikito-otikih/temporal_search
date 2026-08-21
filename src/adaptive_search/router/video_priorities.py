@@ -1,15 +1,11 @@
-"""The video-priorities read endpoint: order-aware tuple ranking plus optional boundary refinement."""
+"""The video-priorities read endpoint: order-aware tuple ranking over a session's artifacts."""
 
 from __future__ import annotations
 
-from typing import Any
-
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query
 
 from ..algorithms import distinctness_from_timestamps, robust_sigmoid
-from ..boundary_refinement import refine_event_boundary
-from ..dependencies import adaptive_service, boundary_refinement_runtime
-from ..providers import VideoAssetNotFoundError
+from ..dependencies import adaptive_service
 from ..schemas import EventConstraint, SparseCandidate, TemporalRegion, VideoPriority
 from ..session import SessionBundle
 from ..tuple_ranking import TupleRankingResult, build_order_constraints, rank_videos_by_region_tuples
@@ -17,6 +13,12 @@ from ..tuple_ranking import TupleRankingResult, build_order_constraints, rank_vi
 from .errors import _raise_api_error
 
 router = APIRouter()
+
+# Fixed reporting scale for VideoPriority.distinctness - not a session
+# hyperparameter (it never affected ranking at this endpoint; see
+# _compute_priorities()'s comment). Matches the pipeline's existing 3.0s
+# margin/gap scale rather than introducing a new constant.
+DISTINCTNESS_NORM_SECONDS = 3.0
 
 
 def _matched_frame_ids(
@@ -30,14 +32,13 @@ def _matched_frame_ids(
     """One frame_id per session event, in event order, "?" wherever it can't
     be resolved. A commands/fix-frame pin for (event, video_id) always wins,
     checked fresh on every call - not baked into the tuple at ranking time -
-    so the list reflects the current constraint state immediately, matching
-    _video_priority_with_boundary_refinement's existing user_fixed
-    precedence. Otherwise resolves through the winning tuple's region_id ->
-    its one backing candidate (atomic_regions() guarantees exactly one -
-    see that function's docstring) -> SparseCandidate.frame_id. A synthetic
-    fixed region (tuple_ranking._synthetic_fixed_regions) has a deliberately
-    unresolvable candidate_id; that case is already caught by the
-    fix-frame check above before reaching this fallback."""
+    so the list reflects the current constraint state immediately. Otherwise
+    resolves through the winning tuple's region_id -> its one backing
+    candidate (atomic_regions() guarantees exactly one - see that function's
+    docstring) -> SparseCandidate.frame_id. A synthetic fixed region
+    (tuple_ranking._synthetic_fixed_regions) has a deliberately unresolvable
+    candidate_id; that case is already caught by the fix-frame check above
+    before reaching this fallback."""
 
     frame_ids: list[str] = []
     for event_id, region_id in zip(event_ids, winner.region_ids):
@@ -59,15 +60,9 @@ def _matched_frame_ids(
     return tuple(frame_ids)
 
 
-def _compute_priorities(
-    bundle: SessionBundle,
-) -> tuple[list[VideoPriority], dict[str, dict[str, float]]]:
+def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
     """Rank every video in the session and build one VideoPriority per video,
-    sorted, with `prioritized_video_ids` reordering already applied. Shared
-    by the paginated JSON endpoint and the CSV export - both need the exact
-    same ranking, just presented differently. Also returns each video's
-    winning tuple's per-event timestamps (event_id -> seconds, uncovered
-    events omitted) for the JSON endpoint's optional boundary refinement."""
+    sorted, with `prioritized_video_ids` reordering already applied."""
 
     event_ids = [event.event_id for event in bundle.session.events]
     candidates_by_id = {c.id: c for c in bundle.artifacts.candidates}
@@ -103,44 +98,28 @@ def _compute_priorities(
     # Raw tuple scores aren't bounded to [0,1] (mean region score can be
     # pushed above 1 or below 0 by the order term) - normalize via
     # robust_sigmoid() before writing into priority_score's UnitScore field.
+    # This normalized score is priority_score directly - no further blending
+    # against coverage/mean/min/distinctness weights: those were a session-
+    # level hyperparameter surface that degenerated to a no-op at this
+    # endpoint (video_mean_weight was the only nonzero default, and a single
+    # weight always cancels out of its own weighted average), so it was
+    # removed from SearchHyperparameters entirely. distinctness is still
+    # reported below - purely descriptive now, not a ranking input.
     normalized_by_video = dict(zip(
         (video_id for video_id, _ in tuple_ranking),
         robust_sigmoid([score for _, score in tuple_ranking]),
     ))
-    refinement_params = bundle.session.hyperparameters.refinement
-    distinctness_norm = refinement_params.distinctness_norm_seconds
-    # The tuple's own (coverage+order-aware) sigmoid score already plays the
-    # role prioritize_videos()'s coverage/mean/min weights jointly play there
-    # - there's no separate coverage/mean/min signal here to split
-    # video_distinctness_weight against, so it's blended against that
-    # combined weight instead. distinctness_weight=0.0 (the default) reduces
-    # this exactly to the un-blended score: previously video_distinctness_
-    # weight was silently read only by prioritize_videos(), which this
-    # endpoint stopped calling entirely once tuple ranking became
-    # unconditional - the weight was fully advertised and settable but had
-    # zero effect here.
-    other_weight = (
-        refinement_params.video_coverage_weight
-        + refinement_params.video_mean_weight
-        + refinement_params.video_min_weight
-    )
-    distinctness_weight = refinement_params.video_distinctness_weight
-    weight_sum = other_weight + distinctness_weight
 
     raw_by_video = dict(tuple_ranking)
     blended: list[tuple[str, float, TupleRankingResult, float, float, int]] = []
-    for video_id, raw_priority_score in normalized_by_video.items():
+    for video_id, priority_score in normalized_by_video.items():
         winner = tuples_by_video[video_id][0]
         covered_timestamps = [t for t in winner.timestamps if t is not None]
-        distinctness = distinctness_from_timestamps(covered_timestamps, distinctness_norm)
-        priority_score = (
-            other_weight * raw_priority_score + distinctness_weight * distinctness
-        ) / weight_sum
+        distinctness = distinctness_from_timestamps(covered_timestamps, DISTINCTNESS_NORM_SECONDS)
         coverage = sum(1 for region_id in winner.region_ids if region_id is not None)
         blended.append((video_id, priority_score, winner, distinctness, raw_by_video[video_id], coverage))
 
     priorities: list[VideoPriority] = []
-    tuple_anchors_by_video: dict[str, dict[str, float]] = {}
     # priority_score (post robust_sigmoid, which clamps at clip_z=8.0 - see
     # algorithms/scoring.py) ties easily once several videos' raw scores all
     # exceed the clamp threshold. Break ties with the raw, pre-normalization
@@ -166,11 +145,6 @@ def _compute_priorities(
                 ),
             )
         )
-        tuple_anchors_by_video[video_id] = {
-            event_id: timestamp
-            for event_id, timestamp in zip(event_ids, winner.timestamps)
-            if timestamp is not None
-        }
 
     # prioritized_video_ids reorders the response only - it never touches
     # priority_score or any video's own tuple/region choice (distinct from
@@ -184,7 +158,7 @@ def _compute_priorities(
         rest = [item for item in priorities if item.video_id not in prioritized_set]
         priorities = front + rest
 
-    return priorities, tuple_anchors_by_video
+    return priorities
 
 
 @router.get("/search-sessions/{session_id}/video-priorities")
@@ -192,182 +166,16 @@ def get_video_priorities(
     session_id: str,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=1000),
-    apply_boundary_refinement: bool = Query(default=False),
 ):
     try:
         bundle = adaptive_service.get_session(session_id)
-        priorities, tuple_anchors_by_video = _compute_priorities(bundle)
+        priorities = _compute_priorities(bundle)
         page = priorities[offset : offset + limit]
-
-        refinement_params = bundle.session.hyperparameters.refinement
-        capability_available = False
-        capability_reason: str | None = None
-        if apply_boundary_refinement:
-            runtime_spec = (
-                refinement_params.quality_embedding_model
-                if refinement_params.quality_profile_enabled
-                else refinement_params.embedding_model
-            )
-            capability = boundary_refinement_runtime.capabilities(runtime_spec)
-            capability_available = capability.available
-            capability_reason = capability.reason
-
-        items = [
-            _video_priority_with_boundary_refinement(
-                priority,
-                bundle=bundle,
-                requested=apply_boundary_refinement,
-                capability_available=capability_available,
-                capability_reason=capability_reason,
-                tuple_anchors=tuple_anchors_by_video[priority.video_id],
-            )
-            for priority in page
-        ]
         return {
-            "items": items,
+            "items": [priority.model_dump(mode="json") for priority in page],
             "total": len(priorities),
             "offset": offset,
             "limit": limit,
-            "boundary_refinement_capability": {
-                "requested": apply_boundary_refinement,
-                "available": capability_available,
-                "reason": capability_reason,
-            },
         }
     except Exception as exc:
         _raise_api_error(exc)
-
-
-# CSV-only substitute for an unresolved frame - "0" is an arbitrary,
-# always-valid frame_id (NonNegativeInt), not a claim that frame 0 is
-# actually a match. The JSON endpoint keeps the honest "?" from
-# VideoPriority.matched_frame_ids; this exists because CSV consumers
-# (spreadsheets, numeric-only downstream tooling) generally can't handle a
-# non-numeric cell in an otherwise all-integer column.
-_CSV_UNRESOLVED_FRAME_ID = "0"
-
-
-@router.get("/search-sessions/{session_id}/video-priorities/export.csv")
-def export_video_priorities_csv(session_id: str):
-    """video_id,frame(evt0),frame(evt1),... - one row per ranked video, same
-    order GET .../video-priorities would return unpaginated, no header row
-    (column count varies per session's event count, so a fixed header
-    wouldn't be meaningful across sessions). An unresolved frame ("?" in
-    VideoPriority.matched_frame_ids) is written as _CSV_UNRESOLVED_FRAME_ID
-    here instead - see that constant's comment for why."""
-
-    try:
-        bundle = adaptive_service.get_session(session_id)
-        priorities, _ = _compute_priorities(bundle)
-        lines = [
-            ",".join([
-                priority.video_id,
-                *(
-                    _CSV_UNRESOLVED_FRAME_ID if frame_id == "?" else frame_id
-                    for frame_id in priority.matched_frame_ids
-                ),
-            ])
-            for priority in priorities
-        ]
-        body = "\n".join(lines) + ("\n" if lines else "")
-        return Response(content=body, media_type="text/csv")
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-def _video_priority_with_boundary_refinement(
-    priority,
-    *,
-    bundle,
-    requested: bool,
-    capability_available: bool,
-    capability_reason: str | None,
-    tuple_anchors: dict[str, float],
-) -> dict[str, Any]:
-    payload = priority.model_dump(mode="json")
-    if not requested:
-        payload["boundary_refinement"] = {"status": "not_requested", "events": None}
-        return payload
-    if not capability_available:
-        payload["boundary_refinement"] = {
-            "status": "skipped_runtime_unavailable",
-            "events": None,
-        }
-        return payload
-
-    metadata = boundary_refinement_runtime.frame_provider.catalog.metadata(priority.video_id)
-    if metadata is None or metadata.fps is None:
-        payload["boundary_refinement"] = {"status": "skipped_no_metadata", "events": None}
-        return payload
-
-    events_out: list[dict[str, Any]] = []
-    for event in bundle.session.events:
-        # A user-confirmed frame (commands/fix-frame) is authoritative: skip
-        # both seed-selection and the GPU refine call entirely for this event
-        # - there's nothing to refine once the user already picked the exact
-        # frame themselves.
-        event_constraint = bundle.session.constraints.event_constraints.get(event.event_id)
-        if (
-            event_constraint is not None
-            and event_constraint.fixed_video_id == priority.video_id
-            and event_constraint.fixed_timestamp_seconds is not None
-        ):
-            events_out.append(
-                {
-                    "event_id": event.event_id,
-                    "anchor_seconds": event_constraint.fixed_timestamp_seconds,
-                    "refined_seconds": event_constraint.fixed_timestamp_seconds,
-                    "used_fallback": False,
-                    "boundary_type": event.boundary_type,
-                    "sampled_frame_count": 0,
-                    "source": "user_fixed",
-                }
-            )
-            continue
-
-        # The winning region-tuple already chose one region per event
-        # jointly, order-aware - use its timestamp directly rather than
-        # re-deriving an independent per-event argmax, which is exactly the
-        # mechanism tuple ranking exists to avoid (see tuple_ranking.py's
-        # module docstring). An event absent from tuple_anchors (not
-        # covered by the winning tuple) has nothing to refine.
-        anchor_seconds = tuple_anchors.get(event.event_id)
-        if anchor_seconds is None:
-            continue
-        try:
-            outcome = refine_event_boundary(
-                provider=boundary_refinement_runtime.frame_provider,
-                embedder=boundary_refinement_runtime.embedder,
-                video_id=priority.video_id,
-                event_id=event.event_id,
-                anchor_query=event.anchor_query,
-                pre_state=event.pre_state,
-                post_state=event.post_state,
-                boundary_type=event.boundary_type,
-                anchor_seconds=anchor_seconds,
-                fps=metadata.fps,
-                duration_ms=metadata.duration_ms,
-                parameters=bundle.session.hyperparameters.boundary,
-            )
-        except VideoAssetNotFoundError:
-            payload["boundary_refinement"] = {
-                "status": "skipped_video_not_in_catalog",
-                "events": None,
-            }
-            return payload
-        events_out.append(
-            {
-                "event_id": event.event_id,
-                "anchor_seconds": outcome.anchor_seconds,
-                "refined_seconds": outcome.refined_seconds,
-                "used_fallback": outcome.used_fallback,
-                "boundary_type": event.boundary_type,
-                "sampled_frame_count": outcome.sampled_frame_count,
-                "source": "tuple_ranking",
-            }
-        )
-    payload["boundary_refinement"] = {
-        "status": "applied" if events_out else "skipped_no_metadata",
-        "events": events_out or None,
-    }
-    return payload

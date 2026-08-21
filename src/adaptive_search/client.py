@@ -1,9 +1,7 @@
 """Validated adapter for the sparse frame-search service on port 8000.
 
-This module is independent of the legacy client. It preserves ``event_id`` and
-``query_variant`` so retrieval variants can be fused without being mistaken
-for multiple temporal events.
-"""
+This module is independent of the legacy client. One query per event - no
+fusion across variants (that used to happen here has been removed)."""
 
 from __future__ import annotations
 
@@ -46,18 +44,15 @@ class UpstreamResponse(BaseModel):
 
 
 @dataclass(frozen=True)
-class QueryVariant:
+class EventQuery:
     event_id: str
-    variant_id: str
     text: str
 
     def __post_init__(self) -> None:
         if not self.event_id.strip():
             raise ValueError("event_id must not be empty")
-        if not self.variant_id.strip():
-            raise ValueError("variant_id must not be empty")
         if not self.text.strip():
-            raise ValueError("query variant text must not be empty")
+            raise ValueError("query text must not be empty")
 
 
 class TimestampResolver(Protocol):
@@ -127,15 +122,15 @@ class UpstreamSearchClient:
         self,
         *,
         session_id: str,
-        variants: Sequence[QueryVariant],
+        events: Sequence[EventQuery],
         top_k: int,
         timestamp_resolver: TimestampResolver | None = None,
     ) -> list[SparseCandidate]:
         if not session_id.strip():
             raise ValueError("session_id must not be empty")
         candidates: list[SparseCandidate] = []
-        for variant in variants:
-            response = self.search(variant.text, top_k)
+        for event_query in events:
+            response = self.search(event_query.text, top_k)
             for rank, hit in enumerate(response.results, start=1):
                 video_id = normalize_video_id(hit.video_name)
                 fallback = (
@@ -156,33 +151,21 @@ class UpstreamSearchClient:
                     SparseCandidate(
                         id=_candidate_id(
                             session_id,
-                            variant.event_id,
-                            variant.variant_id,
+                            event_query.event_id,
                             video_id,
                             hit.frame_index,
                             rank,
                         ),
                         session_id=session_id,
-                        event_id=variant.event_id,
+                        event_id=event_query.event_id,
                         video_id=video_id,
                         frame_id=hit.frame_index,
                         timestamp_seconds=timestamp,
                         raw_relevance_score=hit.score,
-                        query_variant=variant.variant_id,
                         watch_url=hit.watch_url,
                     )
                 )
         return candidates
-
-
-def variants_from_mapping(
-    event_queries: Mapping[str, Mapping[str, str]],
-) -> list[QueryVariant]:
-    return [
-        QueryVariant(event_id=event_id, variant_id=variant_id, text=text)
-        for event_id in sorted(event_queries)
-        for variant_id, text in sorted(event_queries[event_id].items())
-    ]
 
 
 def parse_display_timestamp(value: str | None) -> float:
@@ -223,13 +206,12 @@ def normalize_video_id(video_name: str) -> str:
 def _candidate_id(
     session_id: str,
     event_id: str,
-    variant_id: str,
     video_id: str,
     frame_index: int,
     rank: int,
 ) -> str:
     payload = "\x1f".join(
-        (session_id, event_id, variant_id, video_id, str(frame_index), str(rank))
+        (session_id, event_id, video_id, str(frame_index), str(rank))
     ).encode("utf-8")
     return f"candidate_upstream_{sha256(payload).hexdigest()[:20]}"
 

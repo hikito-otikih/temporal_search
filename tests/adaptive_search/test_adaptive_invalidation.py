@@ -16,17 +16,10 @@ class AdaptiveInvalidationTests(unittest.TestCase):
         paths = {"tuple_ranking.order_weight"}
         self.assertEqual(invalidated_for_parameters(paths), ["tuple"])
 
-    def test_refinement_weight_change_starts_at_refinement(self):
-        paths = {"refinement.video_mean_weight"}
+    def test_boundary_type_event_change_starts_at_tuple(self):
         self.assertEqual(
-            invalidated_for_parameters(paths),
-            ["refinement", "proposal", "tuple"],
-        )
-
-    def test_pre_state_event_change_reuses_sparse_retrieval(self):
-        self.assertEqual(
-            invalidated_for_event({"event.pre_state_query"}),
-            ["refinement", "proposal", "tuple"],
+            invalidated_for_event({"event.boundary_type"}),
+            ["tuple"],
         )
 
     def test_fingerprint_is_order_independent_but_code_sensitive(self):

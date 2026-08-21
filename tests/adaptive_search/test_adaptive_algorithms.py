@@ -1,124 +1,10 @@
 import unittest
 
-from adaptive_search.algorithms import (
-    calibrate_frame_scores,
-    generate_boundary_proposals,
-    prioritize_videos,
-    temporal_nms,
-)
-from adaptive_search.schemas import (
-    BoundaryHyperparameters,
-    EventProposal,
-    FrameScoreSample,
-    RefinementHyperparameters,
-    SparseCandidate,
-    TemporalRegion,
-)
-
-
-def candidate(candidate_id, event_id, video_id, timestamp, score=0.8):
-    return SparseCandidate(
-        id=candidate_id,
-        session_id="session",
-        event_id=event_id,
-        video_id=video_id,
-        frame_id=int(timestamp * 10),
-        timestamp_seconds=float(timestamp),
-        raw_relevance_score=float(score),
-        query_variant="anchor-en-0",
-    )
-
-
-def frame_sample(event_id, region_id, timestamp, *, transition=2.0):
-    before = timestamp < transition
-    return FrameScoreSample(
-        session_id="session",
-        event_id=event_id,
-        video_id="video",
-        region_id=region_id,
-        frame_id=int(timestamp * 10),
-        timestamp_seconds=float(timestamp),
-        raw_anchor_score=1.0 if timestamp == transition else 0.1,
-        raw_pre_score=2.0 if before else -2.0,
-        raw_post_score=-2.0 if before else 2.0,
-        raw_motion_score=0.0,
-    )
-
-
-def proposal(proposal_id, event_id, timestamp, score, *, frame_id=None):
-    return EventProposal(
-        id=proposal_id,
-        session_id="session",
-        event_id=event_id,
-        video_id="video",
-        region_id=f"region-{event_id}",
-        timestamp_seconds=float(timestamp),
-        frame_id=frame_id if frame_id is not None else int(timestamp * 10),
-        raw_semantic_score=float(score),
-        normalized_semantic_score=float(score),
-        raw_boundary_score=float(score),
-        normalized_boundary_score=float(score),
-        pre_consistency_score=float(score),
-        post_persistence_score=float(score),
-        final_event_score=float(score),
-    )
+from adaptive_search.algorithms import prioritize_videos
+from adaptive_search.schemas import TemporalRegion, VideoPriorityHyperparameters
 
 
 class AdaptiveAlgorithmTests(unittest.TestCase):
-    def test_calibration_preserves_raw_scores_and_pairs_pre_post(self):
-        samples = [frame_sample("e1", "r1", value) for value in range(5)]
-        calibrated = calibrate_frame_scores(samples)
-
-        self.assertEqual(
-            [item.raw_anchor_score for item in calibrated],
-            [item.raw_anchor_score for item in samples],
-        )
-        for item in calibrated:
-            self.assertAlmostEqual(
-                item.normalized_pre_score + item.normalized_post_score,
-                1.0,
-            )
-
-    def test_boundary_proposal_peaks_at_pre_to_post_transition(self):
-        parameters = BoundaryHyperparameters(
-            window_options_seconds=(1.0, 2.0),
-            min_samples_per_side=1,
-            motion_contrast_weight=0.0,
-            window_length_regularization=0.0,
-            window_asymmetry_regularization=0.0,
-            nms_radius_seconds=0.0,
-            max_proposals_per_region=10,
-        )
-        proposals = generate_boundary_proposals(
-            [frame_sample("e1", "r1", value) for value in range(5)],
-            parameters,
-        )
-
-        self.assertTrue(proposals)
-        best = max(proposals, key=lambda item: item.final_event_score)
-        self.assertEqual(best.timestamp_seconds, 2.0)
-        self.assertGreater(best.pre_consistency_score, 0.9)
-        self.assertGreater(best.post_persistence_score, 0.9)
-
-    def test_boundary_requires_enough_samples_on_both_sides(self):
-        parameters = BoundaryHyperparameters(
-            window_options_seconds=(1.0,),
-            min_samples_per_side=2,
-        )
-        samples = [frame_sample("e1", "r1", value) for value in (0, 1, 2)]
-        self.assertEqual(generate_boundary_proposals(samples, parameters), [])
-
-    def test_temporal_nms_keeps_strongest_local_peak(self):
-        kept = temporal_nms(
-            [
-                proposal("weak", "e1", 1.0, 0.4),
-                proposal("strong", "e1", 1.2, 0.9),
-                proposal("far", "e1", 3.0, 0.5),
-            ],
-            radius_seconds=0.5,
-        )
-        self.assertEqual({item.id for item in kept}, {"strong", "far"})
-
     def test_prioritize_videos_distinctness_defaults_to_inert(self):
         """video_distinctness_weight=0.0 (default) must not change
         priority_score at all - distinctness is still computed and exposed,
@@ -171,7 +57,7 @@ class AdaptiveAlgorithmTests(unittest.TestCase):
                 raw_coarse_score=0.9, normalized_coarse_score=0.9,
             ),
         ]
-        parameters = RefinementHyperparameters(
+        parameters = VideoPriorityHyperparameters(
             video_mean_weight=1.0, video_distinctness_weight=1.0,
             distinctness_norm_seconds=3.0,
         )
@@ -199,7 +85,7 @@ class AdaptiveAlgorithmTests(unittest.TestCase):
                 raw_coarse_score=0.9, normalized_coarse_score=0.9,
             ),
         ]
-        parameters = RefinementHyperparameters(distinctness_norm_seconds=3.0)
+        parameters = VideoPriorityHyperparameters(distinctness_norm_seconds=3.0)
         priorities = prioritize_videos(regions, ["e1", "e2"], parameters)
         self.assertAlmostEqual(priorities[0].distinctness, 0.5)
 

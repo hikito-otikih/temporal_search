@@ -2,24 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
-
 from fastapi import APIRouter, Query, Response, status
 
-from rewrite.schemas import RewriteRequest
-
 from ..constants import SUPPORTED_BOUNDARY_PROFILES, SUPPORTED_RELATIONS
-from ..dependencies import adaptive_service, boundary_refinement_runtime
-from ..embedding import (
-    DEFAULT_SIGLIP2_MODEL,
-    QUALITY_QWEN_EMBEDDING_MODEL,
-    QUALITY_QWEN_RERANKER_MODEL,
-)
-from ..rewrite_bridge import build_session_plan
-from ..schemas import SearchHyperparameters
+from ..dependencies import adaptive_service
 
 from .api_schemas import (
-    CreateSessionFromRewriteRequest,
     CreateSessionRequest,
     MutationResponse,
     PatchEventRequest,
@@ -28,14 +16,13 @@ from .api_schemas import (
     SessionResponse,
 )
 from .errors import _raise_api_error
-from .responses import _apply_runtime_embedding_default, _mutation_response, _session_response
+from .responses import _mutation_response, _session_response
 
 router = APIRouter()
 
 
 @router.get("/searchers")
 def list_searchers():
-    capability = boundary_refinement_runtime.capabilities()
     return {
         "searchers": [
             {
@@ -60,13 +47,6 @@ def list_searchers():
                 "session_api": True,
                 "ordered_events": True,
                 "algorithm_core_available": True,
-                "live_refinement_available": capability.available,
-                "frame_provider": asdict(capability.provider),
-                "live_refinement": asdict(capability),
-                "runtime_model": capability.model_id or DEFAULT_SIGLIP2_MODEL,
-                "runtime_model_spec": capability.runtime_model_spec,
-                "quality_embedding_model": QUALITY_QWEN_EMBEDDING_MODEL,
-                "quality_reranker_model": QUALITY_QWEN_RERANKER_MODEL,
                 "supported_relations": SUPPORTED_RELATIONS,
                 "supported_boundary_profiles": SUPPORTED_BOUNDARY_PROFILES,
             },
@@ -81,71 +61,12 @@ def list_searchers():
 )
 def create_search_session(request: CreateSessionRequest):
     try:
-        hyperparameters = _apply_runtime_embedding_default(request.hyperparameters)
         bundle = adaptive_service.create_session(
             events=request.events,
             common_query=request.common_query,
             searcher_type=request.searcher_type,
-            hyperparameters=hyperparameters,
+            hyperparameters=request.hyperparameters,
             constraints=request.constraints,
-        )
-        return _session_response(bundle)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.post(
-    "/search-sessions/from-queries",
-    response_model=SessionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-async def create_session_from_queries(request: RewriteRequest):
-    from adaptive_search import router as _router
-
-    try:
-        plan = await _router.rewrite_queries_and_build_plan(
-            queries=request.query,
-            common_query=request.common_query,
-        )
-        bundle = adaptive_service.create_session(
-            events=list(plan.events),
-            common_query=plan.common_query,
-            retrieval_variants={
-                event_id: list(texts)
-                for event_id, texts in plan.retrieval_variants.items()
-            },
-            hyperparameters=_apply_runtime_embedding_default(
-                SearchHyperparameters()
-            ),
-        )
-        return _session_response(bundle)
-    except Exception as exc:
-        _raise_api_error(exc)
-
-
-@router.post(
-    "/search-sessions/from-rewrite",
-    response_model=SessionResponse,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_session_from_rewrite(request: CreateSessionFromRewriteRequest):
-    # Unlike /from-queries, this never calls the LLM - build_session_plan is
-    # a pure mapping over an analysis the caller already has (e.g. one
-    # fetched via POST /rewrite to preview it first), so a session created
-    # here is guaranteed to match exactly what was previewed instead of a
-    # second, independent (and possibly different) rewrite result.
-    try:
-        plan = build_session_plan(request.analysis, request.common_query)
-        bundle = adaptive_service.create_session(
-            events=list(plan.events),
-            common_query=plan.common_query,
-            retrieval_variants={
-                event_id: list(texts)
-                for event_id, texts in plan.retrieval_variants.items()
-            },
-            hyperparameters=_apply_runtime_embedding_default(
-                SearchHyperparameters()
-            ),
         )
         return _session_response(bundle)
     except Exception as exc:

@@ -2,8 +2,8 @@
 
 Temporal Search ranks sequences of video keyframes that match a list of text
 queries. The repository keeps the original frame-index search API and adds a
-versioned adaptive session API with query fusion, boundary proposals, user
-constraints, and ordered tuple ranking.
+versioned adaptive session API with user constraints and ordered tuple
+ranking.
 
 The repository exposes the search through a FastAPI server on port `8001`.
 
@@ -28,44 +28,11 @@ Available strategies:
 Call `GET /v1/searchers` to discover the legacy and adaptive contracts. The
 adaptive workflow uses `POST /v1/search-sessions`, ingests sparse candidates
 via `POST .../artifacts/candidates`, and ranks videos with order-aware tuple
-ranking via `GET .../video-priorities` (optionally requesting native-FPS
-boundary refinement). Precomputed frame-level anchor/pre/post scores can be
-ingested via `POST .../artifacts/frame-scores` to drive the separate
-dense-refinement/proposal pipeline. `commands/refine` and the `GET .../tuples`
-endpoint have been removed - see
-[docs/ADAPTIVE_PIPELINE_MIGRATION.md](docs/ADAPTIVE_PIPELINE_MIGRATION.md) for
-what replaced them. The system supports deterministic RRF fusion, temporal
-regions, budgeted refinement, boundary profiles, temporal NMS, hard
-constraints, optimistic revisions, and bounded same-video tuple assembly.
-
-The local `YouCook2FrameProvider` uses PyAV and actual presentation timestamps;
-catalog discovery over 1,660 videos and a real frame decode have been verified.
-The medium/dense orchestrator, strict API command, persisted run metrics, and
-region completion state are covered by end-to-end tests with an injected fake
-embedder. `GET /v1/searchers` reports live refinement available only when both
-the provider and model are usable, while retaining `frame_provider` as a nested
-sub-capability.
-
-Live image encoding is microbatched (default 64) under a hard 4,096-frame
-server-side run ceiling. First-load/model-runtime/OOM failures return a
-capability `503` without committing partial frame-score artifacts.
-
-The balanced model profile is SigLIP2 Base. Its runtime is lazy: API startup
-does not load/download weights, and live inference requires an immutable
-`ADAPTIVE_SIGLIP2_REVISION`. Actual SigLIP2 GPU inference has not yet been
-verified in this workspace. The optional Qwen3-VL embedding/reranker profile is
-specified but still has no executed runtime.
-
-Optional local refinement setup is documented in `.env.example` and
-`requirements/live-refinement.txt`. At minimum configure `YOUCOOK2_DATA_ROOT`
-and a pinned SigLIP2 revision before starting the API.
-
-`GET /v1/searchers` exposes the complete active `runtime_model_spec`. When a
-balanced session omits `refinement.embedding_model`, the API persists that
-exact configured spec automatically; an explicit client spec is never silently
-rewritten. The ordered-frame reranker and motion scorer are not implemented,
-so `use_reranker=true` is rejected and live runs report
-`motion_scores_available=false`.
+ranking via `GET .../video-priorities`. The system supports temporal regions,
+hard constraints, optimistic revisions, and bounded same-video tuple assembly.
+There is no live GPU boundary-refinement stage anywhere in this repository
+(removed from both the adaptive and legacy verticals) - ranking runs entirely
+on the upstream search service's own candidate scores and timestamps.
 
 The self-contained [YouCook2 benchmark](research_tools/benchmarks/youcook2/README.md) queries
 `http://127.0.0.1:8000/search` and measures corpus Video Recall@K without sending
@@ -79,30 +46,30 @@ and paper evaluation guidance.
 
 ## Requirements
 
-- Python 3.11 or newer (matches `pyproject.toml`'s `requires-python`)
+- Python 3.12 or newer (matches `pyproject.toml`'s `requires-python`)
+- [`uv`](https://docs.astral.sh/uv/) for environment/dependency management
 - An upstream frame-search API running at `http://127.0.0.1:8000/search`
 
-Install the Python dependencies in a virtual environment:
+Set up the environment with `uv`:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e .
+uv sync
 ```
 
-This installs the runtime dependencies pinned in `requirements/base.txt`
-(referenced automatically via `pyproject.toml`'s dynamic dependencies).
-For optional local boundary-refinement support, additionally install
-`requirements/live-refinement.txt`:
+This creates `.venv` and installs the exact dependency versions pinned in
+`uv.lock` (regenerated from `pyproject.toml`'s `[project.dependencies]` via
+`uv lock` whenever a dependency changes). Run project commands through `uv`
+without activating the venv manually:
 
 ```bash
-python -m pip install -r requirements/live-refinement.txt
+uv run python src/main.py
+uv run python -m unittest discover -s tests -t .
 ```
 
-On Windows PowerShell, activate the environment with:
+To activate the venv directly instead:
 
-```powershell
-.venv\Scripts\Activate.ps1
+```bash
+source .venv/bin/activate       # Windows PowerShell: .venv\Scripts\Activate.ps1
 ```
 
 ## Upstream search API
@@ -140,8 +107,7 @@ The upstream `POST /search` endpoint must return this shape:
 Start the upstream search service on port `8000`, then run:
 
 ```bash
-pip install -e .
-python src/main.py
+uv run python src/main.py
 ```
 
 The Temporal Search API will be available at `http://127.0.0.1:8001`. Interactive API documentation is available at `http://127.0.0.1:8001/docs`.
@@ -151,166 +117,6 @@ Check that it is running:
 ```bash
 curl http://127.0.0.1:8001/
 ```
-
-## Rewrite queries with Ollama
-
-`POST /rewrite` analyzes all event queries as one batch and returns structured
-video context, standalone target moments, Vietnamese/English retrieval queries,
-visible states, temporal boundaries, relations, inferred facts, and ambiguities.
-
-Create a `.env` file in the project root before starting the API:
-
-```dotenv
-OLLAMA_API_KEY=your-ollama-api-key
-OLLAMA_API_URL=https://ollama.com/api/chat
-OLLAMA_MODEL=gpt-oss:20b
-```
-
-`OLLAMA_API_KEY` is required. `OLLAMA_API_URL` and `OLLAMA_MODEL` are
-optional; they default to `https://ollama.com/api/chat` and `gpt-oss:20b`.
-The model is server configuration and cannot be selected in the request. Do not
-commit a real API key to source control.
-
-Example request:
-
-```json
-{
-  "common_query": "Đoạn video múa lân một con lân màu vàng đen trắng, tìm các sự kiện sau",
-  "query": [
-    "Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
-    "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên."
-  ]
-}
-```
-
-Illustrative response (exact wording depends on the configured model):
-
-```json
-{
-  "video_context": {
-    "scene": "múa lân",
-    "main_entities": [
-      "một con lân màu vàng, đen và trắng"
-    ]
-  },
-  "events": [
-    {
-      "event_id": 0,
-      "original_query": "Lân quay vòng trên cột số 4 bằng 2 chân trước rồi tiếp đất. Khoảnh khắc đầu tiên mà lân bắt đầu xoay vòng.",
-      "target_moment_vi": "Trong màn múa lân, khoảnh khắc đầu tiên con lân màu vàng, đen và trắng bắt đầu xoay vòng trên cột số 4 bằng hai chân trước.",
-      "retrieval_queries_vi": [
-        "Khoảnh khắc bắt đầu xoay vòng của con lân màu vàng, đen và trắng trên cột số 4 bằng hai chân trước.",
-        "Con lân vàng, đen và trắng vừa bắt đầu xoay trên cột số 4 trong màn múa lân."
-      ],
-      "retrieval_queries_en": [
-        "The first moment the yellow, black, and white lion starts spinning on pillar number 4 using its two front legs.",
-        "A yellow, black, and white lion beginning its spin on pillar number 4 during a lion dance."
-      ],
-      "retrieval_queries_en_language": ["en", "en"],
-      "subject": "con lân màu vàng, đen và trắng",
-      "action": "bắt đầu xoay vòng trên cột số 4 bằng hai chân trước",
-      "visible_state": "hai chân trước của lân ở trên cột số 4 và cơ thể vừa bắt đầu chuyển động xoay",
-      "anchor_query": "Con lân màu vàng, đen và trắng bắt đầu xoay vòng trên cột số 4 bằng hai chân trước trong màn múa lân.",
-      "pre_state": "Ngay trước đó, lân đứng yên trên cột số 4, chưa bắt đầu xoay vòng.",
-      "post_state": "Ngay sau đó, lân đang xoay vòng trên cột số 4 bằng hai chân trước.",
-      "boundary": "start",
-      "temporal_relation": {
-        "relation": "sequence_start",
-        "reference_event_id": null
-      },
-      "required_entities": [
-        "con lân màu vàng, đen và trắng",
-        "cột số 4"
-      ],
-      "soft_context": [
-        "màn múa lân"
-      ],
-      "excluded_context": [
-        "khoảnh khắc lân đã tiếp đất"
-      ],
-      "inferred_information": [
-        "Màu sắc của con lân được lấy từ common_query."
-      ],
-      "ambiguities": []
-    },
-    {
-      "event_id": 1,
-      "original_query": "Khoảnh khắc 4 chân hoàn toàn chạm đất đầu tiên.",
-      "target_moment_vi": "Trong màn múa lân, khoảnh khắc đầu tiên con lân màu vàng, đen và trắng có cả bốn chân hoàn toàn chạm đất sau khi xoay vòng trên cột số 4.",
-      "retrieval_queries_vi": [
-        "Khoảnh khắc con lân màu vàng, đen và trắng có bốn chân hoàn toàn chạm đất lần đầu.",
-        "Con lân vàng, đen và trắng vừa tiếp đất hoàn toàn bằng cả bốn chân trong màn múa lân."
-      ],
-      "retrieval_queries_en": [
-        "The first moment the yellow, black, and white lion lands with all four feet fully on the ground.",
-        "The yellow, black, and white lion fully touching down with all four feet during the lion dance."
-      ],
-      "retrieval_queries_en_language": ["en", "en"],
-      "subject": "con lân màu vàng, đen và trắng",
-      "action": "tiếp đất hoàn toàn bằng cả bốn chân",
-      "visible_state": "cả bốn chân của lân đang chạm đất",
-      "anchor_query": "Con lân màu vàng, đen và trắng có cả bốn chân hoàn toàn chạm đất trong màn múa lân.",
-      "pre_state": "Ngay trước đó, lân vẫn đang ở trên không hoặc chỉ một phần chân chạm đất.",
-      "post_state": "Ngay sau đó, cả bốn chân của lân đã chạm đất hoàn toàn.",
-      "boundary": "end",
-      "temporal_relation": {
-        "relation": "after",
-        "reference_event_id": 0
-      },
-      "required_entities": [
-        "con lân màu vàng, đen và trắng"
-      ],
-      "soft_context": [
-        "màn múa lân"
-      ],
-      "excluded_context": [
-        "khoảnh khắc lân bắt đầu xoay vòng"
-      ],
-      "inferred_information": [
-        "Màu sắc của con lân được lấy từ common_query."
-      ],
-      "ambiguities": []
-    }
-  ]
-}
-```
-
-### Rewrite behavior
-
-- `common_query` is optional. A blank value is treated as omitted.
-- The API makes one Ollama request for the complete event batch, allowing the
-  model to resolve shared entities and explicit cross-event relations.
-- Every `target_moment_vi` and retrieval query is required to be understandable
-  on its own. The response preserves the event count, order, IDs, and exact
-  `original_query` strings.
-- The server validates the complete response against strict Pydantic schemas,
-  checks source alignment and distinct retrieval queries, then retries the full
-  batch once with validation feedback if needed.
-- If both model drafts are structurally valid but a lexical context check is
-  still too strict, the server keeps the valid candidate and deterministically
-  adds the cleaned `common_query` context instead of returning a false `502`.
-- Temporary connection failures and upstream `408`, `425`, or `5xx`
-  responses are retried once.
-- Each event contains exactly two Vietnamese and two English retrieval queries.
-- Ollama Cloud does not currently support the structured-output `format` field,
-  so the JSON Schema is included in the prompt and enforced again by the server.
-
-### Rewrite errors
-
-- `422` indicates invalid input. `query` must contain 1-32 non-empty strings.
-  Each query is limited to 4,000 characters, all queries together to 24,000,
-  and `common_query` to 8,000. Unknown fields, including `modelname` and
-  `model_name`, are rejected.
-- `500` indicates that `OLLAMA_API_KEY` is not configured.
-- `502` indicates a non-recoverable Ollama connection/error response or that
-  no structurally valid output was available after the validation retry.
-- `503` indicates that Ollama rate-limited the request.
-- `504` indicates that the Ollama request timed out.
-
-Errors use FastAPI's standard `detail` field. The endpoint never returns a
-partially validated batch. Safe server logs distinguish upstream failures,
-structural validation failures, semantic retries, and context fallback without
-logging the API key or raw model output.
 
 ## Search example
 
@@ -355,11 +161,6 @@ Example response:
       ]
     }
   ],
-  "boundary_refinement_capability": {
-    "requested": false,
-    "available": false,
-    "reason": null
-  },
   "search_truncated": false
 }
 ```
@@ -469,9 +270,6 @@ Design notes:
   probability/confidence.
 - Ground truth (`video_path`) is parsed only inside the YouCook2 evaluator;
   retrieval payloads contain only event text and top-K.
-- Live dense refinement is capability-gated (`GET /v1/searchers`); when
-  `live_refinement_available=false` you can still ingest precomputed frame
-  scores.
 - Run the UI tests with:
 
 ```bash
@@ -482,10 +280,9 @@ Design notes:
 
 ```text
 src/
-├── main.py                  FastAPI application assembly (mounts all 3 routers)
+├── main.py                  FastAPI application assembly (mounts both routers)
 ├── config.py                Process-wide .env bootstrap
 ├── adaptive_search/         Adaptive domain: router, schemas, service, algorithms
-├── rewrite/                 LLM query-rewrite: router, schemas, service, prompt constants
 └── legacy_search/           Pre-adaptive pipeline: router, schemas, service, searchers/
 data/                        Sample results and optional object metadata
 docs/                        Revised plan and adaptive technical specification

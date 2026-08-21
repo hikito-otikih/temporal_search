@@ -3,62 +3,7 @@ import unittest
 from fastapi.testclient import TestClient
 
 from adaptive_search.dependencies import adaptive_service
-from adaptive_search.schemas import (
-    EventDefinition,
-    RetrievalHyperparameters,
-    SparseCandidate,
-)
-from adaptive_search.retrieval import fuse_candidates_rrf
 from main import app
-
-
-def sparse(candidate_id, event_id, variant, frame_id, score):
-    return SparseCandidate(
-        id=candidate_id,
-        session_id="session",
-        event_id=event_id,
-        video_id="video",
-        frame_id=frame_id,
-        timestamp_seconds=float(frame_id),
-        raw_relevance_score=float(score),
-        query_variant=variant,
-    )
-
-
-class AdaptiveEdgeCaseTests(unittest.TestCase):
-    def test_rrf_fuses_variants_without_creating_extra_events(self):
-        fused = fuse_candidates_rrf(
-            [
-                sparse("a1", "e1", "vi-0", 1, 0.9),
-                sparse("a2", "e1", "en-0", 1, 50.0),
-                sparse("b1", "e1", "vi-0", 2, 0.8),
-                sparse("b2", "e1", "en-0", 2, 49.0),
-                sparse("c1", "e2", "vi-0", 3, 0.7),
-            ],
-            RetrievalHyperparameters(
-                top_n_per_variant=10,
-                top_n_fused=10,
-                rrf_k=60,
-                query_variants_per_event=4,
-            ),
-        )
-
-        self.assertEqual(len(fused), 3)
-        self.assertEqual([item.event_id for item in fused].count("e1"), 2)
-        e1_frame_one = next(
-            item for item in fused if item.event_id == "e1" and item.frame_id == 1
-        )
-        self.assertEqual(e1_frame_one.query_variant, "rrf:en-0,vi-0")
-        self.assertNotEqual(e1_frame_one.raw_relevance_score, (0.9 + 50.0) / 2)
-
-    def test_transition_profile_requires_observable_pre_and_post_states(self):
-        with self.assertRaisesRegex(ValueError, "require both pre_state"):
-            EventDefinition(
-                event_id="e1",
-                original_query="door opens",
-                anchor_query="an opening door",
-                boundary_type="transition",
-            )
 
 
 class AdaptiveNoOpApiTests(unittest.TestCase):
@@ -76,7 +21,6 @@ class AdaptiveNoOpApiTests(unittest.TestCase):
                 "events": [
                     {
                         "event_id": "e1",
-                        "original_query": "event",
                         "anchor_query": "event",
                     }
                 ]

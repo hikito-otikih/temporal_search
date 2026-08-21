@@ -9,7 +9,6 @@ from main import app
 def event(event_id: str) -> dict:
     return {
         "event_id": event_id,
-        "original_query": event_id,
         "anchor_query": event_id,
     }
 
@@ -241,7 +240,7 @@ class AdaptiveConstraintApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(
             response.json()["invalidated_stages"],
-            ["refinement", "proposal", "tuple"],
+            ["refinement", "tuple"],
         )
 
     def test_unknown_event_reference_is_rejected(self):

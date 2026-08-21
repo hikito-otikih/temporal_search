@@ -6,12 +6,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from rewrite.schemas import RewriteResponse
-
 from ..schemas import (
     BoundaryType,
     EventDefinition,
-    FixFrameEntry,
     SearchHyperparameters,
     SearchConstraints,
     SparseCandidate,
@@ -33,21 +30,8 @@ class CreateSessionRequest(ApiModel):
     )
 
 
-class CreateSessionFromRewriteRequest(ApiModel):
-    """Creates a session from an already-computed rewrite analysis (e.g. one
-    a caller already fetched via `POST /rewrite` to preview) instead of raw
-    queries - `rewrite_bridge.build_session_plan` is pure and LLM-free, so
-    this never calls Ollama, unlike `/search-sessions/from-queries`."""
-
-    analysis: RewriteResponse
-    common_query: str | None = Field(default=None, max_length=8000)
-
-
 class EventPatch(ApiModel):
-    original_query: str | None = Field(default=None, min_length=1)
     anchor_query: str | None = Field(default=None, min_length=1)
-    pre_state: str | None = Field(default=None, min_length=1)
-    post_state: str | None = Field(default=None, min_length=1)
     boundary_type: BoundaryType | None = None
 
     @model_validator(mode="after")
@@ -103,11 +87,6 @@ class FixFrameRequest(ApiModel):
     region_id: str | None = Field(default=None, min_length=1)
 
 
-class BatchFixFrameRequest(ApiModel):
-    expected_revision: int = Field(ge=0)
-    fixes: list[FixFrameEntry] = Field(min_length=1, max_length=1000)
-
-
 class ClearEventConstraintRequest(ApiModel):
     expected_revision: int = Field(ge=0)
     event_id: str = Field(min_length=1)
@@ -116,14 +95,12 @@ class ClearEventConstraintRequest(ApiModel):
 class ArtifactCounts(ApiModel):
     candidates: int
     regions: int
-    proposals: int
     runs: int
 
 
 class SessionResponse(ApiModel):
     session: SearchSession
     artifact_counts: ArtifactCounts
-    live_refinement: dict[str, Any]
 
 
 class MutationResponse(ApiModel):

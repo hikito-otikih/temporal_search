@@ -8,34 +8,27 @@ from typing import Any, Iterable, Mapping
 
 
 PIPELINE_STAGES = (
-    "rewrite",
     "retrieval",
     "region",
     "refinement",
-    "proposal",
     "tuple",
 )
 
 
-# Longest-prefix match is used.
+# Longest-prefix match is used. SearchHyperparameters has exactly one field
+# (tuple_ranking) - "retrieval"/"refinement"/"embedding"/"boundary" prefixes
+# were removed alongside the SearchHyperparameters fields they used to
+# match (RetrievalHyperparameters.retrieval, VideoPriorityHyperparameters's
+# session-level refinement/embedding_model, BoundaryHyperparameters.boundary
+# - none of these are reachable from a hyperparameters patch any more).
 PARAMETER_STAGE_PREFIXES: dict[str, str] = {
-    "retrieval": "retrieval",
-    "refinement": "refinement",
-    "embedding": "refinement",
-    "boundary": "proposal",
     "tuple_ranking": "tuple",
 }
 
 
 EVENT_STAGE_PREFIXES: dict[str, str] = {
-    "original_query": "rewrite",
     "anchor_query": "retrieval",
-    "retrieval_queries": "retrieval",
-    "pre_state_query": "refinement",
-    "pre_state": "refinement",
-    "post_state_query": "refinement",
-    "post_state": "refinement",
-    "boundary_type": "proposal",
+    "boundary_type": "tuple",
     "temporal_relation": "tuple",
 }
 
@@ -82,9 +75,9 @@ def invalidated_for_constraint(command: str) -> list[str]:
     """Return MVP invalidation; live providers may prepend scoped refinement."""
 
     if command in {"mark_videos", "clear_allowed_videos"}:
-        return ["refinement", "proposal", "tuple"]
+        return ["refinement", "tuple"]
     if command in {"fix_frame", "clear_constraint"}:
-        return ["proposal", "tuple"]
+        return ["tuple"]
     raise ValueError(f"unknown constraint command: {command}")
 
 

@@ -9,11 +9,7 @@ from main import app
 def event(event_id, text):
     return {
         "event_id": event_id,
-        "original_query": text,
         "anchor_query": text,
-        "pre_state": f"before {text}",
-        "post_state": f"after {text}",
-        "boundary_type": "transition",
     }
 
 
@@ -33,7 +29,7 @@ class AdaptiveApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201, response.text)
         return response.json()["session"]["id"]
 
-    def test_capability_is_honest_when_frame_provider_is_missing(self):
+    def test_adaptive_capability_is_reported(self):
         response = self.client.get("/v1/searchers")
         self.assertEqual(response.status_code, 200)
         adaptive = next(
@@ -42,8 +38,7 @@ class AdaptiveApiTests(unittest.TestCase):
             if item["searcher_type"] == "adaptive_temporal"
         )
         self.assertTrue(adaptive["algorithm_core_available"])
-        self.assertFalse(adaptive["live_refinement_available"])
-        self.assertIn("raw video", adaptive["frame_provider"]["reason"])
+        self.assertTrue(adaptive["session_api"])
 
     def test_video_priorities_ranks_by_coverage_and_score(self):
         session_id = self.create_session()
@@ -56,7 +51,6 @@ class AdaptiveApiTests(unittest.TestCase):
                 "frame_id": 20,
                 "timestamp_seconds": 2.0,
                 "raw_relevance_score": 0.9,
-                "query_variant": "anchor-en-0",
             },
             {
                 "id": "c2",
@@ -66,7 +60,6 @@ class AdaptiveApiTests(unittest.TestCase):
                 "frame_id": 60,
                 "timestamp_seconds": 6.0,
                 "raw_relevance_score": 0.9,
-                "query_variant": "anchor-en-0",
             },
             {
                 "id": "c3",
@@ -76,7 +69,6 @@ class AdaptiveApiTests(unittest.TestCase):
                 "frame_id": 20,
                 "timestamp_seconds": 2.0,
                 "raw_relevance_score": 0.9,
-                "query_variant": "anchor-en-0",
             },
         ]
         response = self.client.post(
@@ -111,7 +103,7 @@ class AdaptiveApiTests(unittest.TestCase):
                     {
                         "id": "c1", "session_id": session_id, "event_id": "e1",
                         "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
-                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                        "raw_relevance_score": 0.8,
                     },
                 ],
             },
@@ -153,7 +145,7 @@ class AdaptiveApiTests(unittest.TestCase):
                     {
                         "id": "c1", "session_id": session_id, "event_id": "e1",
                         "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
-                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                        "raw_relevance_score": 0.8,
                     },
                 ],
             },
@@ -186,12 +178,12 @@ class AdaptiveApiTests(unittest.TestCase):
                     {
                         "id": "c1", "session_id": session_id, "event_id": "e1",
                         "video_id": "video", "frame_id": 20, "timestamp_seconds": 2.0,
-                        "raw_relevance_score": 0.8, "query_variant": "anchor-en-0",
+                        "raw_relevance_score": 0.8,
                     },
                     {
                         "id": "c2", "session_id": session_id, "event_id": "e2",
                         "video_id": "video", "frame_id": 60, "timestamp_seconds": 6.0,
-                        "raw_relevance_score": 0.9, "query_variant": "anchor-en-0",
+                        "raw_relevance_score": 0.9,
                     },
                 ],
             },

@@ -1,7 +1,6 @@
 from .client import search_queries
 from .utils import cluster_videos
 from itertools import count
-from .schemas import ClusteredCandidate
 import csv
 import json
 from .searchers.temporal import TemporalSearcher
@@ -9,12 +8,6 @@ from .searchers.ambiguous import AmbiguousSearcher, TraversalBudget
 from json import JSONDecodeError
 
 from .constants import MAP_KEYFRAMES_CSV_PATH, OBJECT_DETECTIONS_JSON_PATH
-
-from adaptive_search.boundary_refinement import refine_event_boundary
-from adaptive_search.client import normalize_video_id, parse_display_timestamp
-from adaptive_search.dependencies import boundary_refinement_runtime
-from adaptive_search.exceptions import UpstreamSearchError
-from adaptive_search.providers import VideoAssetNotFoundError
 
 
 def _load_frame_index_map(video_name: str) -> dict[int, int]:
@@ -69,82 +62,10 @@ def check_object_satisfaction(clustered_videos, object_name_list, objectThreshol
             result.satisfiedObjects = required_object_names.issubset(detected_object_names)
 
 
-def _refine_tuple_candidates(
-    tuple_: list[ClusteredCandidate],
-    *,
-    video_name: str,
-    query: list[str],
-    capability_available: bool,
-) -> list[dict]:
-    """Boundary-refine every candidate in one result tuple, or mark why not.
-
-    Legacy queries carry no pre/post-state text, so every call below passes
-    boundary_type="unknown", pre_state=None, post_state=None - this dispatches
-    refine_event_boundary() to the "state" (anchor-persistence) profile, never
-    the degenerate transition path (see boundary_refinement.py's docstring).
-    Each ClusteredCandidate's own `timestamp` (upstream-formatted "MM:SS", not
-    `frame_index`, which is a keyframe index unrelated to real fps) is the
-    anchor to refine from - legacy has no region/candidate-pool structure to
-    pick a seed out of, so boundary_seeds.select_event_seeds() does not apply.
-    """
-
-    if not capability_available:
-        return [
-            {**candidate.model_dump(), "boundary_refinement_status": "skipped_runtime_unavailable"}
-            for candidate in tuple_
-        ]
-    try:
-        video_id = normalize_video_id(video_name)
-    except UpstreamSearchError:
-        return [
-            {**candidate.model_dump(), "boundary_refinement_status": "skipped_video_not_in_catalog"}
-            for candidate in tuple_
-        ]
-    metadata = boundary_refinement_runtime.frame_provider.catalog.metadata(video_id)
-    if metadata is None or metadata.fps is None:
-        return [
-            {**candidate.model_dump(), "boundary_refinement_status": "skipped_no_metadata"}
-            for candidate in tuple_
-        ]
-
-    refined = []
-    for candidate in tuple_:
-        dumped = candidate.model_dump()
-        if candidate.query_id is None or not (0 <= candidate.query_id < len(query)):
-            # Both searchers always stamp a valid query_id via cluster_videos
-            # before a candidate can reach a result tuple; this is a defensive
-            # fallback for the Optional[int] the schema still allows.
-            dumped["boundary_refinement_status"] = "skipped_no_metadata"
-            refined.append(dumped)
-            continue
-        try:
-            outcome = refine_event_boundary(
-                provider=boundary_refinement_runtime.frame_provider,
-                embedder=boundary_refinement_runtime.embedder,
-                video_id=video_id,
-                event_id=f"legacy-query-{candidate.query_id}",
-                anchor_query=query[candidate.query_id],
-                pre_state=None,
-                post_state=None,
-                boundary_type="unknown",
-                anchor_seconds=parse_display_timestamp(candidate.timestamp),
-                fps=metadata.fps,
-                duration_ms=metadata.duration_ms,
-            )
-        except VideoAssetNotFoundError:
-            dumped["boundary_refinement_status"] = "skipped_video_not_in_catalog"
-            refined.append(dumped)
-            continue
-        dumped["refined_timestamp_seconds"] = outcome.refined_seconds
-        dumped["boundary_refinement_status"] = "applied"
-        refined.append(dumped)
-    return refined
-
-
 def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, gamma: float,
                     searcher_type: str = "TemporalSearcher", objectFilterMode: bool = False, object_name_list: list[str] = None,
-                    objectThreshold: float = 0.5, apply_boundary_refinement: bool = False
-                    ) -> tuple[list[dict], dict, bool]:
+                    objectThreshold: float = 0.5
+                    ) -> tuple[list[dict], bool]:
     number_of_queries = len(query)
     clustered_videos = cluster_videos(search_queries(query, top_k_each_query))
     if objectFilterMode:
@@ -205,42 +126,18 @@ def temporal_search(query: list[str], top_k_tuple: int, top_k_each_query: int, g
                                                 , list_prev_indices, list_endable, gamma, video_name, counter, objectFilterMode, budget=budget)
             search_truncated = temporal_searcher.start_from_last_query() or search_truncated
 
-    capability_available = False
-    capability_reason = None
-    if apply_boundary_refinement:
-        capability = boundary_refinement_runtime.capabilities()
-        capability_available = capability.available
-        capability_reason = capability.reason
-
     results = [
         {
             "score": score,
             "video_name": video_name,
-            "tuple": (
-                _refine_tuple_candidates(
-                    tuple_,
-                    video_name=video_name,
-                    query=query,
-                    capability_available=capability_available,
-                )
-                if apply_boundary_refinement
-                else [
-                    {**candidate.model_dump(), "boundary_refinement_status": "not_requested"}
-                    for candidate in tuple_
-                ]
-            ),
+            "tuple": [candidate.model_dump() for candidate in tuple_],
         }
         for score, _, video_name, tuple_ in sorted(query_results, key=lambda x: x[0], reverse=True)
     ]
-    boundary_refinement_capability = {
-        "requested": apply_boundary_refinement,
-        "available": capability_available,
-        "reason": capability_reason,
-    }
-    return results, boundary_refinement_capability, search_truncated
+    return results, search_truncated
 
 if __name__ == "__main__":
-    query_results, _capability, _truncated = temporal_search(["cat", "dog", "bird", "fish"], 100, 100, 0.05, "TemporalSearcher"
+    query_results, _truncated = temporal_search(["cat", "dog", "bird", "fish"], 100, 100, 0.05, "TemporalSearcher"
                                     , objectFilterMode = True, object_name_list = ["cat", "dog"], objectThreshold = 0.5)
     ### export the result to a json file
     with open("data/temporal_search_results_temporal.json", "w", encoding="utf-8") as f:
