@@ -7,7 +7,11 @@
 # Milvus's parquet segment files directly when its own query engine proves
 # unreliable for a given export (see migrate_milvus_lite_to_server.py's
 # docstring for a real instance of this).
--r base.txt
+#
+# Base runtime deps now live in pyproject.toml directly (uv-managed) rather
+# than a separate requirements/base.txt - install this project itself
+# (editable, `-e .`) to pull those in alongside the two extras below.
+-e .
 
 pymilvus[milvus_lite]
 pyarrow
