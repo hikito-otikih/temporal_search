@@ -9,8 +9,9 @@ thresholds, order scoring, confidence gating, the order_weight=0 <->
 prioritize_videos() equivalence) is covered at the pure-function level in
 test_tuple_ranking.py against directly-constructed TemporalRegion/
 SparseCandidate objects. These tests cover integration instead: does the
-response shape carry the right fields, and does matched_frame_ids correctly
-reflect the winning tuple's own per-event frame choice.
+response shape carry the right fields, and do matched_frame_ids/
+matched_timestamps correctly reflect the winning tuple's own per-event
+frame/timestamp choice.
 """
 
 import unittest
@@ -272,6 +273,7 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         item = response.json()["items"][0]
         self.assertEqual(item["matched_frame_ids"], ["2400", "1500"])
+        self.assertEqual(item["matched_timestamps"], [80.0, 50.0])
 
     def test_user_fixed_frame_still_wins_over_tuple_ranking(self):
         # commands/fix-frame's authoritative-constraint short-circuit must
@@ -308,6 +310,23 @@ class VideoPrioritiesTupleRankingTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         item = response.json()["items"][0]
         self.assertEqual(item["matched_frame_ids"][0], "1260")
+        self.assertEqual(item["matched_timestamps"][0], 42.0)
+
+    def test_uncovered_event_reports_null_timestamp_alongside_its_unresolved_frame_id(self):
+        # Only e1 has a candidate - e2 is uncovered, so matched_frame_ids
+        # reports "?" for it (existing behavior); matched_timestamps must
+        # report null there too, not a stale or fabricated value.
+        session_id = self._create_session([event("e1", "cut onion"), event("e2", "fry onion")])
+        self._submit_candidates(
+            session_id, ["e1"],
+            [candidate("c1", session_id, "e1", "video_full", 10.0, 0.9)],
+        )
+
+        response = self.client.get(f"/v1/search-sessions/{session_id}/video-priorities")
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["items"][0]
+        self.assertEqual(item["matched_frame_ids"], ["300", "?"])
+        self.assertEqual(item["matched_timestamps"], [10.0, None])
 
 
 if __name__ == "__main__":

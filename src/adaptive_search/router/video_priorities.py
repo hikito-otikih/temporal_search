@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from ..algorithms import distinctness_from_timestamps, robust_sigmoid
+from ..algorithms import distinctness_from_timestamps, min_max_normalize
 from ..dependencies import adaptive_service
 from ..schemas import EventConstraint, SparseCandidate, TemporalRegion, VideoPriority
 from ..session import SessionBundle
@@ -21,26 +21,29 @@ router = APIRouter()
 DISTINCTNESS_NORM_SECONDS = 3.0
 
 
-def _matched_frame_ids(
+def _matched_frame_ids_and_timestamps(
     event_ids: list[str],
     winner: TupleRankingResult,
     regions_by_id: dict[str, TemporalRegion],
     candidates_by_id: dict[str, SparseCandidate],
     event_constraints: dict[str, EventConstraint],
     video_id: str,
-) -> tuple[str, ...]:
-    """One frame_id per session event, in event order, "?" wherever it can't
-    be resolved. A commands/fix-frame pin for (event, video_id) always wins,
-    checked fresh on every call - not baked into the tuple at ranking time -
-    so the list reflects the current constraint state immediately. Otherwise
-    resolves through the winning tuple's region_id -> its one backing
-    candidate (atomic_regions() guarantees exactly one - see that function's
-    docstring) -> SparseCandidate.frame_id. A synthetic fixed region
-    (tuple_ranking._synthetic_fixed_regions) has a deliberately unresolvable
-    candidate_id; that case is already caught by the fix-frame check above
-    before reaching this fallback."""
+) -> tuple[tuple[str, ...], tuple[float | None, ...]]:
+    """One frame_id (VideoPriority.matched_frame_ids) and one timestamp_
+    seconds (VideoPriority.matched_timestamps) per session event, in event
+    order and index-aligned with each other - "?"/`None` wherever a frame
+    can't be resolved. A commands/fix-frame pin for (event, video_id) always
+    wins, checked fresh on every call - not baked into the tuple at ranking
+    time - so both lists reflect the current constraint state immediately.
+    Otherwise resolves through the winning tuple's region_id -> its one
+    backing candidate (atomic_regions() guarantees exactly one - see that
+    function's docstring) -> SparseCandidate.frame_id/.timestamp_seconds. A
+    synthetic fixed region (tuple_ranking._synthetic_fixed_regions) has a
+    deliberately unresolvable candidate_id; that case is already caught by
+    the fix-frame check above before reaching this fallback."""
 
     frame_ids: list[str] = []
+    timestamps: list[float | None] = []
     for event_id, region_id in zip(event_ids, winner.region_ids):
         constraint = event_constraints.get(event_id)
         if (
@@ -49,6 +52,7 @@ def _matched_frame_ids(
             and constraint.fixed_frame_id is not None
         ):
             frame_ids.append(str(constraint.fixed_frame_id))
+            timestamps.append(constraint.fixed_timestamp_seconds)
             continue
         region = regions_by_id.get(region_id) if region_id is not None else None
         candidate = (
@@ -57,7 +61,8 @@ def _matched_frame_ids(
             else None
         )
         frame_ids.append(str(candidate.frame_id) if candidate is not None else "?")
-    return tuple(frame_ids)
+        timestamps.append(candidate.timestamp_seconds if candidate is not None else None)
+    return tuple(frame_ids), tuple(timestamps)
 
 
 def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
@@ -97,7 +102,17 @@ def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
     )
     # Raw tuple scores aren't bounded to [0,1] (mean region score can be
     # pushed above 1 or below 0 by the order term) - normalize via
-    # robust_sigmoid() before writing into priority_score's UnitScore field.
+    # min_max_normalize() before writing into priority_score's UnitScore
+    # field. Deliberately not robust_sigmoid(): that z-scores each video
+    # against the whole candidate-video population, so a tight, well-
+    # separated top cluster - the exact case a caller most wants to tell
+    # apart - gets compressed into a narrow band near the sigmoid's ceiling,
+    # or literally tied once enough of them clear its clip_z (see
+    # algorithms/scoring.py::min_max_normalize()'s own docstring for the
+    # full comparison). min_max_normalize() spreads the *returned* videos
+    # linearly across [0,1] by relative raw_score instead, so the top result
+    # reads as meaningfully ahead of the rest rather than indistinguishable
+    # from it.
     # This normalized score is priority_score directly - no further blending
     # against coverage/mean/min/distinctness weights: those were a session-
     # level hyperparameter surface that degenerated to a no-op at this
@@ -107,7 +122,7 @@ def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
     # reported below - purely descriptive now, not a ranking input.
     normalized_by_video = dict(zip(
         (video_id for video_id, _ in tuple_ranking),
-        robust_sigmoid([score for _, score in tuple_ranking]),
+        min_max_normalize([score for _, score in tuple_ranking]),
     ))
 
     raw_by_video = dict(tuple_ranking)
@@ -120,14 +135,17 @@ def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
         blended.append((video_id, priority_score, winner, distinctness, raw_by_video[video_id], coverage))
 
     priorities: list[VideoPriority] = []
-    # priority_score (post robust_sigmoid, which clamps at clip_z=8.0 - see
-    # algorithms/scoring.py) ties easily once several videos' raw scores all
-    # exceed the clamp threshold. Break ties with the raw, pre-normalization
+    # priority_score can still tie exactly - a genuine raw_score tie, or
+    # every video sharing the same raw_score (min_max_normalize()'s 0.5-for-
+    # everyone zero-spread case). Break ties with the raw, pre-normalization
     # score, then with event coverage, before finally falling back to
     # video_id for determinism.
     for video_id, priority_score, winner, distinctness, raw_score, coverage in sorted(
         blended, key=lambda item: (-item[1], -item[4], -item[5], item[0])
     ):
+        matched_frame_ids, matched_timestamps = _matched_frame_ids_and_timestamps(
+            event_ids, winner, regions_by_id, candidates_by_id, event_constraints, video_id,
+        )
         priorities.append(
             VideoPriority(
                 video_id=video_id,
@@ -140,9 +158,8 @@ def _compute_priorities(bundle: SessionBundle) -> list[VideoPriority]:
                 raw_score=raw_score,
                 priority_score=priority_score,
                 watch_url=watch_url_by_video.get(video_id),
-                matched_frame_ids=_matched_frame_ids(
-                    event_ids, winner, regions_by_id, candidates_by_id, event_constraints, video_id,
-                ),
+                matched_frame_ids=matched_frame_ids,
+                matched_timestamps=matched_timestamps,
             )
         )
 

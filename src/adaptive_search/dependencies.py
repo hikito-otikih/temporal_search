@@ -13,15 +13,30 @@ import os
 from .client import UpstreamSearchClient
 from .service import AdaptiveSearchService
 from .constants import (
+    UPSTREAM_TIMEOUT_SECONDS_ENV_VAR,
+    UPSTREAM_TIMEOUT_SECONDS_FALLBACK,
     UPSTREAM_URL_ENV_VARS,
     UPSTREAM_URL_FALLBACK,
 )
 
 adaptive_service = AdaptiveSearchService()
 
+
+def _upstream_timeout_seconds() -> float:
+    raw = os.getenv(UPSTREAM_TIMEOUT_SECONDS_ENV_VAR)
+    if raw is None:
+        return UPSTREAM_TIMEOUT_SECONDS_FALLBACK
+    try:
+        value = float(raw)
+    except ValueError:
+        return UPSTREAM_TIMEOUT_SECONDS_FALLBACK
+    return value if value > 0 else UPSTREAM_TIMEOUT_SECONDS_FALLBACK
+
+
 upstream_search_client = UpstreamSearchClient(
     next(
         (url for var in UPSTREAM_URL_ENV_VARS if (url := os.getenv(var))),
         UPSTREAM_URL_FALLBACK,
-    )
+    ),
+    timeout_seconds=_upstream_timeout_seconds(),
 )

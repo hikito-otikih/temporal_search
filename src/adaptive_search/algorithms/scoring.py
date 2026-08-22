@@ -60,6 +60,42 @@ def robust_sigmoid(
     return normalized
 
 
+def min_max_normalize(values: Sequence[float]) -> list[float]:
+    """Map arbitrary finite scores to ``[0, 1]`` by linear min/max rescaling.
+
+    Unlike `robust_sigmoid()`, this preserves each value's relative standing
+    within the population instead of compressing it through a z-scored
+    sigmoid. Appropriate specifically when the population passed in *is* the
+    full set of items a caller will compare side by side (e.g. the final
+    ranked videos for one query) - there, a tight top cluster getting
+    squashed into a narrow band near the sigmoid's ceiling (or, once enough
+    videos' z-scores clear `robust_sigmoid`'s `clip_z`, literally tied at
+    the same saturated value) is actively unhelpful: it hides genuine
+    relative differences a human comparing results is trying to read. See
+    `video_priorities.py`'s `_compute_priorities()`, the one caller of this.
+
+    `robust_sigmoid()` remains the right tool for candidate/region-level
+    normalization (`_candidate_normalized_scores()`, `_region_score_map()`
+    below) - there the population is raw upstream similarity scores across
+    many candidates, where one outlier score shouldn't redefine the scale
+    for everything else. That outlier-resistance is exactly what's
+    counterproductive at the final video-ranking step.
+
+    All values equal maps to 0.5 for every entry (nothing to compare
+    against), matching `robust_sigmoid()`'s own convention for a
+    zero-spread population.
+    """
+
+    if not values:
+        return []
+    lowest = min(values)
+    highest = max(values)
+    spread = highest - lowest
+    if spread <= _EPSILON:
+        return [0.5] * len(values)
+    return [(value - lowest) / spread for value in values]
+
+
 def _candidate_normalized_scores(
     candidates: Sequence[SparseCandidate],
 ) -> dict[str, float]:

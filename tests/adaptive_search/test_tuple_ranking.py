@@ -747,8 +747,9 @@ class RankVideosByRegionTuplesTests(unittest.TestCase):
             self.assertAlmostEqual(score, baseline_by_video[video_id])
 
     def test_winning_tuple_anchors_are_available_per_event(self) -> None:
-        # This is the exact shape video_priorities.py's _matched_frame_ids()
-        # reads to resolve each event's frame_id from the winning tuple.
+        # This is the exact shape video_priorities.py's
+        # _matched_frame_ids_and_timestamps() reads to resolve each event's
+        # frame_id/timestamp from the winning tuple.
         regions = [
             _region("r1", event_id="e1", video_id="v1", candidate_ids=["c1"], normalized_coarse_score=0.8),
             _region("r2", event_id="e2", video_id="v1", candidate_ids=["c2"], normalized_coarse_score=0.7),

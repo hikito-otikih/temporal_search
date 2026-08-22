@@ -25,6 +25,7 @@ from .scoring import (
     _region_score_map,
     _sigmoid,
     adjacent_hinge_penalty,
+    min_max_normalize,
     robust_sigmoid,
 )
 
@@ -32,6 +33,7 @@ __all__ = [
     "adjacent_hinge_penalty",
     "atomic_regions",
     "distinctness_from_timestamps",
+    "min_max_normalize",
     "prioritize_videos",
     "robust_sigmoid",
 ]

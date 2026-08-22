@@ -490,10 +490,11 @@ class VideoPriority(StrictModel):
     order_score: RawScore
     # Pre-normalization tuple score (region_mean_score + order_weight *
     # order_score - gap_penalty) - unbounded, not a UnitScore. Exists so
-    # ties in priority_score (common once robust_sigmoid's clip_z=8.0 clamp
-    # is hit - see region_tuple_ranking_results.md) can still be broken by
-    # a caller, and so the order/coverage tradeoff baked into priority_score
-    # is inspectable instead of opaque.
+    # ties in priority_score (possible when min_max_normalize() has a zero-
+    # spread population, or on a genuine raw_score tie - see
+    # min_max_normalize()'s own docstring) can still be broken by a caller,
+    # and so the order/coverage tradeoff baked into priority_score is
+    # inspectable instead of opaque.
     raw_score: RawScore
     priority_score: UnitScore
     # From the winning tuple's candidates (SparseCandidate.watch_url) -
@@ -507,5 +508,13 @@ class VideoPriority(StrictModel):
     # (event, this video) always wins here, live - not a snapshot from when
     # the tuple was ranked, so this list changes on the next call after a fix.
     matched_frame_ids: tuple[NonEmptyStr, ...] = ()
+    # Parallel to matched_frame_ids (same length, same event order, same
+    # "uncovered" case) - the winning tuple's own timestamp_seconds for that
+    # event, `None` where matched_frame_ids reports "?", or in the rare
+    # accepted-but-inert case of a fix-frame constraint that pins
+    # fixed_frame_id without fixed_timestamp_seconds (see
+    # EventConstraint.validate_fixed_region's own comments). Saves a caller
+    # from re-deriving seconds from frame_id + fps itself.
+    matched_timestamps: tuple[Seconds | None, ...] = ()
 
 
